@@ -33,7 +33,6 @@
 
 ## Koishi 迁移约束
 
-- 必须通过 Koishi CLI 创建插件，使用其标准构建和服务注入机制。
 - Config Schema 只管理原 config.yml 的配置；角色预设正文仍为文件，不内联到配置。
 - 角色预设和模型调用记录位于 Koishi 项目 ./data/yokai 下，保持原文件格式与角色业务语义。
 - 使用 Koishi Session、Bot 跨平台能力，不创建自有平台适配器或连接注册层。
