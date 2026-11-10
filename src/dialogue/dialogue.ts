@@ -1,0 +1,67 @@
+import { Context, Data, type Effect } from "effect"
+import type { ChannelKey } from "../channels/channel"
+import type { CharacterId } from "../characters/character"
+import type { CharacterLoadError, CharacterNotFound } from "../characters/errors"
+import type { CharacterRoutineError } from "../characters/routine"
+import type { InvalidReply } from "./invalid-reply"
+import type { InvalidSchedule, ScheduleTask } from "../scheduling/schedule"
+import type { Message } from "../channels/message"
+import type { ModelError } from "../models/model"
+import type { ChannelNotFound, ChannelStoreError } from "../channels/store"
+import type { NotebookStoreError, NoteNotFound } from "../notebook/store"
+import type { ChannelPlatformError } from "../channels/messaging"
+import type { ProactiveTrigger } from "./next-reply/triggers"
+import type { ResponseParseError } from "./response/parser"
+import type { ScheduleStoreError, ScheduleNotFound } from "../scheduling/store"
+
+export class ChannelExecutionError extends Data.TaggedError("ChannelExecutionError")<{
+  readonly stage: "actions" | "state"
+  // 已确认完成的动作数；失败的当前动作也可能已在外部发生。
+  readonly completedActions: number
+  readonly cause:
+    | ChannelPlatformError
+    | NotebookStoreError
+    | NoteNotFound
+    | ChannelStoreError
+    | ChannelNotFound
+    | CharacterRoutineError
+    | InvalidSchedule
+}> {}
+
+export type ChannelReplyError =
+  | CharacterNotFound
+  | CharacterRoutineError
+  | CharacterLoadError
+  | ChannelStoreError
+  | NotebookStoreError
+  | NoteNotFound
+  | ChannelPlatformError
+  | ModelError
+  | ResponseParseError
+  | InvalidReply
+  | ChannelExecutionError
+  | ChannelNotFound
+  | ScheduleStoreError
+  | ScheduleNotFound
+  | InvalidSchedule
+
+export class ChannelRoleplay extends Context.Service<
+  ChannelRoleplay,
+  {
+    readonly reply: (input: {
+      readonly key: ChannelKey
+      readonly presetId: CharacterId
+      readonly incoming: Message
+    }) => Effect.Effect<{ readonly actionsExecuted: number }, ChannelReplyError>
+    // 频道任务处理器：获取频道锁后调用 Scheduler，旧快照或已暂停/删除任务不执行。
+    readonly scheduled: (
+      task: ScheduleTask,
+    ) => Effect.Effect<
+      { readonly runId: string; readonly actionsExecuted: number } | undefined,
+      ChannelReplyError | ScheduleStoreError | InvalidSchedule
+    >
+    readonly proactive: (
+      trigger: ProactiveTrigger,
+    ) => Effect.Effect<{ readonly actionsExecuted: number }, ChannelReplyError>
+  }
+>()("yokai/dialogue/ChannelRoleplay") {}
