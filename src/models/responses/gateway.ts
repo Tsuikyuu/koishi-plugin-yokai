@@ -76,6 +76,11 @@ export const ModelGatewayResponses = (config: OpenAIConfig & { readonly baseUrl:
         generate: Effect.fn("ModelGatewayResponses.generate")(
           function* (input) {
             const items = yield* requestInput(input)
+            const reasoning = {
+              ...(config.reasoningEffort === undefined ? {} : { effort: config.reasoningEffort }),
+              ...(config.reasoningMode === undefined ? {} : { mode: config.reasoningMode }),
+              ...(config.reasoningContext === undefined ? {} : { context: config.reasoningContext }),
+            }
             const raw = yield* http.postJson({
               url: `${config.baseUrl.replace(/\/+$/, "")}/responses`,
               apiKey: config.apiKey,
@@ -83,7 +88,9 @@ export const ModelGatewayResponses = (config: OpenAIConfig & { readonly baseUrl:
                 model: config.model,
                 stream: false,
                 store: false,
-                ...(config.reasoningEffort === undefined ? {} : { reasoning: { effort: config.reasoningEffort } }),
+                ...(Object.keys(reasoning).length === 0 ? {} : { reasoning }),
+                ...(config.maxOutputTokens === undefined ? {} : { max_output_tokens: config.maxOutputTokens }),
+                ...(config.verbosity === undefined ? {} : { text: { verbosity: config.verbosity } }),
                 input: items,
                 // 无服务端会话；工具循环显式携带加密推理上下文。
                 include: ["reasoning.encrypted_content"],

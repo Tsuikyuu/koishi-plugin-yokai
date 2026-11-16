@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { CharacterId } from "../characters/character"
-import { ReasoningEfforts } from "../models/openai/config"
+import { ReasoningContexts, ReasoningEfforts, ReasoningModes, VerbosityLevels } from "../models/openai/config"
 import { ReasoningEfforts as DeepSeekReasoningEfforts } from "../models/deepseek/config"
 import { SafetyCategories, SafetyThresholds, ThinkingLevels } from "../models/gemini/config"
 
@@ -54,6 +54,10 @@ export const OpenAIProviderConfig = Schema.Struct({
   ...providerFields,
   api: Schema.optionalKey(Schema.Literal("responses")),
   reasoningEffort: Schema.optionalKey(ReasoningEffort),
+  maxOutputTokens: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(16))),
+  verbosity: Schema.optionalKey(Schema.Literals(VerbosityLevels)),
+  reasoningMode: Schema.optionalKey(Schema.Literals(ReasoningModes)),
+  reasoningContext: Schema.optionalKey(Schema.Literals(ReasoningContexts)),
 })
 export type OpenAIProviderConfig = typeof OpenAIProviderConfig.Type
 export const GeminiProviderConfig = Schema.Struct({

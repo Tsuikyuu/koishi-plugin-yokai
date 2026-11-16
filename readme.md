@@ -43,7 +43,7 @@ roleplay:
   character: companion
 ```
 
-这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `reasoningEffort`、`maxOutputTokens`、`stopSequences`、`temperature` 和 `topP`；OpenAI 提供 `reasoningEffort`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
+这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `reasoningEffort`、`maxOutputTokens`、`stopSequences`、`temperature` 和 `topP`；OpenAI 提供 `reasoningEffort`、`maxOutputTokens`、`verbosity`、`reasoningMode` 和 `reasoningContext`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
 
 `models.default` 不再手动输入：插件启动时用已填写密钥的供应商请求 `{baseUrl}/models`，把返回的 `provider/model` 注册为控制台下拉选项，当前配置值始终保留在选项中。保存模型配置后自动刷新列表，包含供应商密钥和地址的修改；新一轮刷新会中断过时请求。请求失败只影响可选项，不阻断启动，并在后台日志显示供应商及脱敏错误类别。插件未运行时（例如尚未启用）没有列表可注册，控制台显示回退输入框。
 
@@ -74,10 +74,14 @@ OpenAI 统一使用 Responses API。以下参数均位于 `models.openai`，留�
 | 参数 | API 字段 | 说明 |
 | --- | --- | --- |
 | `reasoningEffort` | `reasoning.effort` | `none / minimal / low / medium / high / xhigh / max`，支持的档位取决于模型 |
+| `maxOutputTokens` | `max_output_tokens` | 推理与回答的总 token 上限，至少 16 的整数，实际最大值取决于模型 |
+| `verbosity` | `text.verbosity` | `low / medium / high`，控制回答详细程度 |
+| `reasoningMode` | `reasoning.mode` | `standard / pro`，推理执行模式，与 `reasoningEffort` 独立 |
+| `reasoningContext` | `reasoning.context` | `auto / current_turn / all_turns`，控制已回传推理项的使用范围 |
 
 已有配置中的 `api: responses` 仍可读取，控制台不再显示接口选择；`api: chat-completions` 会在配置校验时失败，需删除该项以使用 Responses。模型级支持情况由供应商校验，例如 GPT-6 Astra 不支持 `reasoningEffort: none`。参考 [Responses 接口文档](https://developers.openai.com/api/reference/resources/responses/methods/create)。
 
-Responses 使用 `store: false`，在当前工具循环中显式回传加密推理上下文。
+Responses 使用 `store: false`，在当前工具循环中显式回传加密推理上下文；`reasoningContext` 不会额外持久化跨轮推理或重建历史推理项。token 上限导致的未完成响应按模型调用失败处理，不交付截断正文。
 
 使用 Gemini 时填写 `models.gemini.apiKey`，并选择 `gemini/<模型 ID>`。原生 API 默认根地址为 `https://generativelanguage.googleapis.com/v1beta`；自定义 `baseUrl` 需包含 API 版本，不包含 `/models`。通过 `x-goog-api-key` 请求头认证，使用非流式 `generateContent`，支持系统指令、文本和多轮工具调用。模型列表自动翻页，仅显示支持 `generateContent` 的模型。工具循环保留原始 `thoughtSignature`；推理正文和签名不会进入角色回复或调用记录。
 

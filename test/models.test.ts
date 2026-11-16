@@ -301,7 +301,7 @@ test("DeepSeek rejects malformed reasoning and continuation without leaking prov
   assert.equal(requests, before)
 })
 
-test("OpenAI uses Responses with explicit or omitted API settings", async (t) => {
+test("OpenAI uses Responses, maps generation controls and omits unspecified options", async (t) => {
   const requests: { readonly url: string | undefined; readonly body: unknown }[] = []
   const { app, baseUrl } = await fixture(t, (request, response) => {
     void readBody(request).then((body) => {
@@ -316,7 +316,17 @@ test("OpenAI uses Responses with explicit or omitted API settings", async (t) =>
     readonly settings: NonNullable<Config["models"]["openai"]>
     readonly wire: object
   }[] = [
+    {
+      settings: { maxOutputTokens: 16, verbosity: "low", reasoningEffort: "high", reasoningMode: "pro", reasoningContext: "all_turns" },
+      wire: { max_output_tokens: 16, text: { verbosity: "low" }, reasoning: { effort: "high", mode: "pro", context: "all_turns" } },
+    },
+    { settings: { reasoningMode: "standard" }, wire: { reasoning: { mode: "standard" } } },
+    { settings: { reasoningContext: "current_turn" }, wire: { reasoning: { context: "current_turn" } } },
     { settings: { api: "responses" }, wire: {} },
+    {
+      settings: { verbosity: "high", reasoningContext: "auto" },
+      wire: { text: { verbosity: "high" }, reasoning: { context: "auto" } },
+    },
     { settings: {}, wire: {} },
   ]
   for (const { settings, wire } of cases) {
@@ -340,7 +350,23 @@ test("OpenAI uses Responses with explicit or omitted API settings", async (t) =>
   }
 })
 
-test("Responses preserves tool calls and encrypted continuation through Koishi HTTP", async (t) => {
+test("OpenAI rejects output-token truncation instead of returning partial text", async (t) => {
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    assert.equal(request.url, "/responses")
+    json(response, {
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [{
+        type: "message", role: "assistant", status: "incomplete",
+        content: [{ type: "output_text", text: "partial provider-secret" }],
+      }],
+    })
+  })
+  const model = ModelGatewayOpenAI({ baseUrl, apiKey: key, model: "gpt-test", timeoutMs: 1000, maxOutputTokens: 16 })
+  assert.equal(await errorKind(generate(model, app.http)), "IncompleteResponse")
+})
+
+test("Responses preserves generation controls, tool calls and encrypted continuation through Koishi HTTP", async (t) => {
   const bodies: unknown[] = []
   const output = [
     { type: "reasoning", id: "reason-1", summary: [], encrypted_content: "opaque-provider-context" },
@@ -373,6 +399,10 @@ test("Responses preserves tool calls and encrypted continuation through Koishi H
     model: "gpt-test",
     timeoutMs: 1000,
     reasoningEffort: "low",
+    maxOutputTokens: 4096,
+    verbosity: "medium",
+    reasoningMode: "pro",
+    reasoningContext: "all_turns",
   })
   const toolInput: ModelInput = {
     ...input,
@@ -397,7 +427,9 @@ test("Responses preserves tool calls and encrypted continuation through Koishi H
     model: "gpt-test",
     stream: false,
     store: false,
-    reasoning: { effort: "low" },
+    reasoning: { effort: "low", mode: "pro", context: "all_turns" },
+    max_output_tokens: 4096,
+    text: { verbosity: "medium" },
     input: [
       { role: "user", content: "hello" },
       ...output,

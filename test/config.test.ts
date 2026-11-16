@@ -129,8 +129,11 @@ test("DeepSeek validates output-token and stop-sequence limits through both conf
   }
 })
 
-test("OpenAI defaults to Responses while accepting explicit Responses configuration", async () => {
+test("OpenAI resolves Responses controls without overriding omitted values", async () => {
   const cases: NonNullable<Config["models"]["openai"]>[] = [
+    { maxOutputTokens: 16, verbosity: "low", reasoningMode: "pro", reasoningContext: "all_turns", reasoningEffort: "high" },
+    { maxOutputTokens: 8192, verbosity: "high", reasoningMode: "standard", reasoningContext: "current_turn" },
+    { reasoningContext: "auto", verbosity: "medium" },
     { api: "responses" },
     {},
   ]
@@ -141,16 +144,27 @@ test("OpenAI defaults to Responses while accepting explicit Responses configurat
     const resolved = await Effect.runPromise(resolveModel(raw.models))
     assert.equal(resolved.provider, "openai")
     assert.equal(resolved.api, "responses")
+    assert.equal(resolved.maxOutputTokens, settings.maxOutputTokens)
+    assert.equal(resolved.verbosity, settings.verbosity)
+    assert.equal(resolved.reasoningMode, settings.reasoningMode)
+    assert.equal(resolved.reasoningContext, settings.reasoningContext)
     assert.equal(resolved.reasoningEffort, settings.reasoningEffort)
     assert.ok(!JSON.stringify(resolved).includes("fixture-secret"))
   }
 })
 
-test("OpenAI rejects the unsupported Chat Completions API", async () => {
+test("OpenAI rejects invalid Responses controls and the unsupported Chat Completions API", async () => {
   for (const settings of [
+    { maxOutputTokens: 0 },
+    { maxOutputTokens: 1 },
+    { maxOutputTokens: 15 },
+    { maxOutputTokens: 16.5 },
+    { verbosity: "verbose" },
+    { reasoningMode: "fast" },
+    { reasoningContext: "history" },
     { api: "chat-completions" },
   ]) {
-    const models = { default: "openai/gpt-test", openai: { apiKey: "fixture-secret", ...settings } }
+    const models = { default: "openai/gpt-test", openai: { api: "responses", apiKey: "fixture-secret", ...settings } }
     assert.throws(() => Config({ models }))
     assert.equal((await Effect.runPromiseExit(resolveModel(models as Config["models"])))._tag, "Failure")
   }

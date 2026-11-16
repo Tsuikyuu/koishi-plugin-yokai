@@ -1,5 +1,5 @@
 import { Schema } from "koishi"
-import { ReasoningEfforts } from "../models/openai/config"
+import { ReasoningContexts, ReasoningEfforts, ReasoningModes, VerbosityLevels } from "../models/openai/config"
 import { ReasoningEfforts as DeepSeekReasoningEfforts } from "../models/deepseek/config"
 import { SafetyCategories, SafetyThresholds, ThinkingLevels } from "../models/gemini/config"
 import { DefaultBaseUrl } from "../models/provider"
@@ -46,6 +46,14 @@ export const Config: Schema<any, Config> = Schema.intersect([
         // 接受已保存的 Responses 配置，控制台不再提供接口选择。
         api: Schema.const("responses").default("responses").hidden(),
         reasoningEffort: Schema.union(ReasoningEfforts).description("可选推理强度，仅用于支持的模型"),
+        maxOutputTokens: Schema.natural().min(16)
+          .description("可选生成 token 上限，至少 16，包含推理与回答；实际最大值取决于模型"),
+        verbosity: Schema.union(VerbosityLevels)
+          .description("可选回答详细程度：low 简短、medium 适中、high 详细；留空使用模型默认值"),
+        reasoningMode: Schema.union(ReasoningModes)
+          .description("可选推理执行模式：standard 或 pro；仅用于支持的模型，与推理强度独立"),
+        reasoningContext: Schema.union(ReasoningContexts)
+          .description("可选推理上下文范围：auto 自动、current_turn 当前轮、all_turns 所有轮；作用于实际回传的推理项"),
       }).description("OpenAI"),
       gemini: Schema.object({
         ...provider,
