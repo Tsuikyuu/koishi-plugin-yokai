@@ -1,30 +1,11 @@
-import { Array as Arr, Effect, Layer, Schema } from "effect"
+import { Array as Arr, Effect, Layer, Redacted, Schema } from "effect"
 import { ModelGateway } from "../gateway"
 import { ModelError } from "../model"
 import type { ReasoningEffort } from "../openai/config"
 import type { ChatCompletionsConfig } from "./config"
 import { ModelHttp } from "../http/client"
-
-const Completion = Schema.Struct({
-  choices: Schema.Array(
-    Schema.Struct({
-      finish_reason: Schema.String,
-      message: Schema.Struct({
-        role: Schema.Literal("assistant"),
-        content: Schema.NullOr(Schema.String),
-        tool_calls: Schema.optionalKey(Schema.Array(Schema.Unknown)),
-      }),
-    }),
-  ),
-})
-
-const ToolCalls = Schema.NonEmptyArray(
-  Schema.Struct({
-    id: Schema.NonEmptyString,
-    type: Schema.Literal("function"),
-    function: Schema.Struct({ name: Schema.NonEmptyString, arguments: Schema.String }),
-  }),
-)
+import { requestMessages } from "./messages"
+import { Completion, ToolCalls } from "./protocol"
 
 export const ModelGatewayChatCompletions = (
   config: ChatCompletionsConfig & { readonly baseUrl: string; readonly reasoningEffort?: ReasoningEffort },
@@ -36,6 +17,7 @@ export const ModelGatewayChatCompletions = (
       return ModelGateway.of({
         generate: Effect.fn("ModelGatewayChatCompletions.generate")(
           function* (input) {
+            const messages = yield* requestMessages(input)
             const raw = yield* http.postJson({
               url: `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`,
               apiKey: config.apiKey,
@@ -45,21 +27,7 @@ export const ModelGatewayChatCompletions = (
                 ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
                 ...(config.topP === undefined ? {} : { top_p: config.topP }),
                 ...(config.reasoningEffort === undefined ? {} : { reasoning_effort: config.reasoningEffort }),
-                messages: input.messages.map((message) => {
-                  if (message.role === "tool")
-                    return { role: "tool", tool_call_id: message.toolCallId, content: message.content }
-                  if (message.role === "assistant" && message.toolCalls !== undefined)
-                    return {
-                      role: "assistant",
-                      content: message.content,
-                      tool_calls: message.toolCalls.map((call) => ({
-                        id: call.id,
-                        type: "function",
-                        function: { name: call.name, arguments: call.arguments },
-                      })),
-                    }
-                  return { role: message.role, content: message.content }
-                }),
+                messages,
                 ...(input.tools === undefined
                   ? {}
                   : { tools: input.tools.map((tool) => ({ type: "function", function: tool })) }),
@@ -71,6 +39,15 @@ export const ModelGatewayChatCompletions = (
             const choice = completion.choices[0]
             if (completion.choices.length !== 1 || choice === undefined)
               return yield* Effect.fail(new ModelError({ kind: "InvalidResponse" }))
+            // 思考模式带工具时须续接原始推理；仅保存在不透明字段中，不进入角色正文或调用记录。
+            const continuation = input.tools === undefined || choice.message.reasoning_content == null
+              ? {}
+              : {
+                  continuation: Redacted.make({
+                    api: "chat-completions",
+                    reasoning_content: choice.message.reasoning_content,
+                  }),
+                }
             if (choice.finish_reason === "tool_calls" && input.tools !== undefined) {
               const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(choice.message.tool_calls).pipe(
                 Effect.mapError(() => new ModelError({ kind: "InvalidResponse" })),
@@ -84,6 +61,7 @@ export const ModelGatewayChatCompletions = (
               }
               return {
                 text: choice.message.content ?? "",
+                ...continuation,
                 toolCalls: Arr.map(calls, (call) => ({
                   id: call.id,
                   name: call.function.name,
@@ -97,8 +75,7 @@ export const ModelGatewayChatCompletions = (
             const text = choice.message.content
             if (text === null || text.trim() === "")
               return yield* Effect.fail(new ModelError({ kind: "InvalidResponse" }))
-            // reasoning_content、用量及其他供应商字段不会进入业务输出或日志。
-            return { text }
+            return { text, ...continuation }
           },
           (effect) =>
             effect.pipe(

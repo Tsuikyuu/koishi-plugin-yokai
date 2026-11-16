@@ -11,6 +11,8 @@ import { ModelGatewayGemini } from "../src/models/gemini/gateway"
 import { ModelHttp } from "../src/models/http/client"
 import { listModels } from "../src/models/catalog"
 import { ModelHttpKoishi } from "../src/models/http/koishi-client"
+import { ModelGatewayRecorded } from "../src/models/records/recorded-gateway"
+import { ModelTraceStore } from "../src/models/records/store"
 import { notebookQueryTool } from "../src/dialogue/tools/notebook-query"
 import { registerModelSchema, watchModelSchema } from "../src/runtime/model-schema"
 import { Config, ModelSchemaName } from "../src/config/schema"
@@ -109,6 +111,149 @@ test("Chat Completions uses Koishi global HTTP headers and request hooks", async
     top_p: 0.8,
     messages: [{ role: "user", content: "hello" }],
   })
+})
+
+test("DeepSeek forwards reasoning settings from Koishi config and leaves omitted settings to the provider", async (t) => {
+  const bodies: unknown[] = []
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      bodies.push(body)
+      json(response, completion)
+    })
+  })
+  for (const reasoningEffort of [undefined, "none", "low", "high", "max"] as const) {
+    const settings = reasoningEffort === undefined ? {} : { reasoningEffort, temperature: 0, topP: 0.9 }
+    const raw = Config({
+      models: {
+        default: "deepseek/deepseek-v4-pro",
+        deepseek: { baseUrl, apiKey: "private-api-key", ...settings },
+      },
+    })
+    const resolved = await Effect.runPromise(resolveModel(raw.models))
+    assert.equal(resolved.provider, "deepseek")
+    const result = await Effect.runPromise(generate(ModelGatewayDeepSeek(resolved), app.http))
+    assert.deepEqual(result, { text: "hello" })
+    assert.deepEqual(bodies.at(-1), {
+      model: "deepseek-v4-pro",
+      stream: false,
+      messages: input.messages,
+      ...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort, temperature: 0, top_p: 0.9 }),
+    })
+  }
+})
+
+test("DeepSeek preserves reasoning across tool rounds without exposing it in replies or call records", async (t) => {
+  const bodies: unknown[] = []
+  const traces: unknown[] = []
+  const calls = [
+    { id: "call-1", type: "function", function: { name: "lookup", arguments: "{}" } },
+    { id: "call-2", type: "function", function: { name: "lookup", arguments: '{"query":"next"}' } },
+  ]
+  const responses = [
+    { finish_reason: "tool_calls", message: {
+      role: "assistant", content: null, reasoning_content: "provider-secret reasoning-1", tool_calls: [calls[0]],
+    } },
+    { finish_reason: "tool_calls", message: {
+      role: "assistant", content: "checking", reasoning_content: "provider-secret reasoning-2", tool_calls: [calls[1]],
+    } },
+    { finish_reason: "stop", message: {
+      role: "assistant", content: "done", reasoning_content: "provider-secret reasoning-final", tool_calls: null,
+    } },
+    { finish_reason: "stop", message: {
+      role: "assistant", content: "next answer", reasoning_content: null,
+    } },
+  ]
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      const next = responses[bodies.length]
+      bodies.push(body)
+      json(response, { choices: [next] })
+    })
+  })
+  const model = ModelGatewayRecorded("deepseek-v4-pro").pipe(Layer.provide(Layer.merge(
+    ModelGatewayDeepSeek({ baseUrl, apiKey: key, model: "deepseek-v4-pro", timeoutMs: 1000, reasoningEffort: "high" }),
+    Layer.succeed(ModelTraceStore, ModelTraceStore.of({
+      begin: (_model, request) => Effect.sync(() => {
+        traces.push(request)
+        return `trace-${traces.length}`
+      }),
+      finish: (_id, outcome) => Effect.sync(() => { traces.push(outcome) }),
+    })),
+  )))
+  const tools = [{ name: "lookup", description: "lookup", parameters: { type: "object" } }] as const
+  let messages: ModelInput["messages"] = [{ role: "system", content: "instructions" }, ...input.messages]
+  for (let round = 0; round < 2; round++) {
+    const result = await Effect.runPromise(generate(model, app.http, { messages, tools }))
+    assert.ok(result.toolCalls)
+    assert.ok(result.continuation)
+    assert.ok(!JSON.stringify(result).includes("provider-secret"))
+    messages = [
+      ...messages,
+      { role: "assistant", content: result.text, toolCalls: result.toolCalls, continuation: result.continuation },
+      { role: "tool", toolCallId: result.toolCalls[0].id, content: `found-${round + 1}` },
+    ]
+  }
+  const result = await Effect.runPromise(generate(model, app.http, { messages, tools }))
+  assert.equal(result.text, "done")
+  assert.equal(result.toolCalls, undefined)
+  assert.ok(result.continuation)
+  assert.ok(!JSON.stringify(result).includes("provider-secret"))
+  const next = await Effect.runPromise(generate(model, app.http, {
+    tools,
+    messages: [
+      ...messages,
+      { role: "assistant", content: result.text, continuation: result.continuation },
+      { role: "user", content: "next question" },
+    ],
+  }))
+  assert.deepEqual(next, { text: "next answer" })
+  assert.deepEqual(bodies[3], {
+    model: "deepseek-v4-pro",
+    stream: false,
+    reasoning_effort: "high",
+    tools: [{ type: "function", function: tools[0] }],
+    messages: [
+      { role: "system", content: "instructions" },
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "", reasoning_content: "provider-secret reasoning-1", tool_calls: [calls[0]] },
+      { role: "tool", tool_call_id: "call-1", content: "found-1" },
+      { role: "assistant", content: "checking", reasoning_content: "provider-secret reasoning-2", tool_calls: [calls[1]] },
+      { role: "tool", tool_call_id: "call-2", content: "found-2" },
+      { role: "assistant", content: "done", reasoning_content: "provider-secret reasoning-final" },
+      { role: "user", content: "next question" },
+    ],
+  })
+  assert.equal(traces.length, 8)
+  assert.ok(!JSON.stringify(traces).includes("provider-secret"))
+  assert.ok(!JSON.stringify(traces).includes("reasoning_content"))
+  assert.ok(!JSON.stringify(traces).includes("continuation"))
+})
+
+test("DeepSeek rejects malformed reasoning and continuation without leaking provider content", async (t) => {
+  let requests = 0
+  let reasoning: unknown
+  const { app, baseUrl } = await fixture(t, (_request, response) => {
+    requests++
+    json(response, { choices: [{
+      finish_reason: "stop",
+      message: { role: "assistant", content: "done", reasoning_content: reasoning },
+    }] })
+  })
+  const model = ModelGatewayDeepSeek({ baseUrl, apiKey: key, model: "deepseek-v4-pro", timeoutMs: 1000 })
+  for (const invalid of [123, { secret: "provider-secret" }]) {
+    reasoning = invalid
+    assert.equal(await errorKind(generate(model, app.http)), "InvalidResponse")
+  }
+  const before = requests
+  for (const invalid of [
+    { api: "openai-responses", reasoning_content: "provider-secret" },
+    { api: "chat-completions", reasoning_content: { secret: "provider-secret" } },
+  ]) {
+    assert.equal(await errorKind(generate(model, app.http, {
+      messages: [{ role: "assistant", content: "previous answer", continuation: Redacted.make(invalid) }],
+    })), "InvalidResponse")
+  }
+  assert.equal(requests, before)
 })
 
 test("Responses preserves tool calls and encrypted continuation through Koishi HTTP", async (t) => {

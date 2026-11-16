@@ -19,14 +19,17 @@ export const resolveModel = Effect.fn("Yokai.resolveModel")(function* (
   const provider = models.default.slice(0, models.default.indexOf("/")) as Provider
   const settings = models[provider]
   if (!settings) return yield* Effect.fail(fail(`models.${provider}`, "缺少所选模型的供应商配置"))
-  const { apiKey, ...rest } = settings
+  const { apiKey } = settings
   if (!apiKey?.trim()) return yield* Effect.fail(fail(`models.${provider}.apiKey`, "所选模型的 API 密钥为空"))
-  return {
-    ...rest,
-    provider,
+  const resolved = {
     model: models.default.slice(provider.length + 1),
     timeoutMs: settings.timeoutMs ?? 60000,
     apiKey: Redacted.make(apiKey),
+  }
+  switch (provider) {
+    case "deepseek": return { ...models.deepseek, ...resolved, provider }
+    case "openai": return { ...models.openai, ...resolved, provider }
+    case "gemini": return { ...models.gemini, ...resolved, provider }
   }
 })
 

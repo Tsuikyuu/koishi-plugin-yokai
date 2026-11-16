@@ -67,6 +67,41 @@ test("selected model credentials remain redacted and model updates validate inde
   }
 })
 
+test("DeepSeek validates sampling bounds and keeps its reasoning settings independent of OpenAI", async () => {
+  for (const settings of [
+    { temperature: 0, topP: Number.MIN_VALUE, reasoningEffort: "none" },
+    { temperature: 2, topP: 1, reasoningEffort: "max" },
+  ] as const) {
+    const raw = Config({
+      ...config,
+      models: {
+        default: "deepseek/deepseek-v4-pro",
+        deepseek: { apiKey: "fixture-secret", ...settings },
+        openai: { reasoningEffort: "medium" },
+      },
+    })
+    const resolved = await Effect.runPromise(resolveModel(raw.models))
+    assert.equal(resolved.provider, "deepseek")
+    assert.equal(resolved.temperature, settings.temperature)
+    assert.equal(resolved.topP, settings.topP)
+    assert.equal(resolved.reasoningEffort, settings.reasoningEffort)
+  }
+  for (const settings of [
+    { topP: 0 },
+    { topP: -0.1 },
+    { topP: 1.01 },
+    { temperature: -0.1 },
+    { temperature: 2.01 },
+    { reasoningEffort: "medium" },
+    { reasoningEffort: "xhigh" },
+    { reasoningEffort: "" },
+  ]) {
+    const models = { default: "deepseek/deepseek-v4-pro", deepseek: { apiKey: "fixture-secret", ...settings } }
+    assert.throws(() => Config({ ...config, models }))
+    assert.equal((await Effect.runPromiseExit(resolveModel(models as Config["models"])))._tag, "Failure")
+  }
+})
+
 test("Gemini configuration resolves independently through the Koishi schema", async () => {
   const raw = Config({
     ...config,

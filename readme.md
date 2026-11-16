@@ -44,9 +44,22 @@ roleplay:
   character: companion
 ```
 
-这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `temperature` 和 `topP`，OpenAI 提供 `api` 和 `reasoningEffort`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
+这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `reasoningEffort`、`temperature` 和 `topP`，OpenAI 提供 `api` 和 `reasoningEffort`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
 
 `models.default` 不再手动输入：插件启动时用已填写密钥的供应商请求 `{baseUrl}/models`，把返回的 `provider/model` 注册为控制台下拉选项，当前配置值始终保留在选项中。保存模型配置后自动刷新列表，包含供应商密钥和地址的修改；新一轮刷新会中断过时请求。请求失败只影响可选项，不阻断启动，并在后台日志显示供应商及脱敏错误类别。插件未运行时（例如尚未启用）没有列表可注册，控制台显示回退输入框。
+
+DeepSeek 的 `models.deepseek.reasoningEffort` 可选 `none`、`low`、`high`、`max`，对应请求中的 `reasoning_effort`。`none` 关闭思考，其他档位开启思考；留空不发送该参数，使用供应商默认值（当前官方模型默认开启思考，强度为 `high`）。思考模式工具循环保留原始 `reasoning_content` 用于续接，推理正文不会进入角色回复或调用记录。
+
+`temperature` 的合法范围为 `[0, 2]`，`topP` 为 `(0, 1]`（不能为 `0`）；留空使用供应商默认值。根据 [DeepSeek 官方接口文档](https://api-docs.deepseek.com/api/create-chat-completion)，采样参数的实际效果取决于模型和模式：
+
+| 模型 / 模式 | `temperature` | `topP` |
+| --- | --- | --- |
+| `deepseek-flash` 思考模式 | 忽略 | 生效，默认 `1`；低于 `0.95` 按 `0.95` 处理 |
+| `deepseek-flash` 非思考模式 | 生效，默认 `1` | 忽略，固定为 `1` |
+| `deepseek-v4-pro` 思考模式 | 忽略 | 忽略；启用工具调用时固定为 `0.95`，否则为 `1` |
+| `deepseek-v4-pro` 非思考模式 | 生效，默认 `1` | 生效，默认 `1` |
+
+适配器原样发送显式配置的合法采样值，由供应商按模型和模式处理。使用 `deepseek-v4-pro` 非思考模式时，官方建议只调整 `temperature` 或 `topP` 中的一项。
 
 使用 Gemini 时填写 `models.gemini.apiKey`，并选择 `gemini/<模型 ID>`。原生 API 默认根地址为 `https://generativelanguage.googleapis.com/v1beta`；自定义 `baseUrl` 需包含 API 版本，不包含 `/models`。通过 `x-goog-api-key` 请求头认证，使用非流式 `generateContent`，支持系统指令、文本和多轮工具调用。模型列表自动翻页，仅显示支持 `generateContent` 的模型。工具循环保留原始 `thoughtSignature`；推理正文和签名不会进入角色回复或调用记录。
 

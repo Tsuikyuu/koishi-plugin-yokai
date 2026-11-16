@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { CharacterId } from "../characters/character"
 import { ReasoningEfforts } from "../models/openai/config"
+import { ReasoningEfforts as DeepSeekReasoningEfforts } from "../models/deepseek/config"
 import { SafetyCategories, SafetyThresholds, ThinkingLevels } from "../models/gemini/config"
 
 const NonEmpty = Schema.String.check(Schema.isNonEmpty())
@@ -32,7 +33,7 @@ const HttpUrl = NonEmpty.check(
 )
 
 const SamplingTemperature = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(2))
-const SamplingTopP = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(1))
+const SamplingTopP = Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1))
 const ReasoningEffort = Schema.Literals(ReasoningEfforts)
 
 const providerFields = {
@@ -42,6 +43,7 @@ const providerFields = {
 }
 export const DeepSeekProviderConfig = Schema.Struct({
   ...providerFields,
+  reasoningEffort: Schema.optionalKey(Schema.Literals(DeepSeekReasoningEfforts)),
   temperature: Schema.optionalKey(SamplingTemperature),
   topP: Schema.optionalKey(SamplingTopP),
 })

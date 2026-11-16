@@ -1,5 +1,6 @@
 import { Schema } from "koishi"
 import { ReasoningEfforts } from "../models/openai/config"
+import { ReasoningEfforts as DeepSeekReasoningEfforts } from "../models/deepseek/config"
 import { SafetyCategories, SafetyThresholds, ThinkingLevels } from "../models/gemini/config"
 import { DefaultBaseUrl } from "../models/provider"
 import type { Config as PluginConfig } from "./config"
@@ -18,11 +19,6 @@ const provider = {
     .description("单次模型调用总超时（毫秒），同时遵守 Koishi HTTP 超时设置"),
 }
 
-const sampling = {
-  temperature: Schema.number().min(0).max(2).description("可选 Temperature"),
-  topP: Schema.number().min(0).max(1).description("可选 Top P"),
-}
-
 export const Config: Schema<any, Config> = Schema.intersect([
   Schema.object({
     version: Schema.const(1).default(1).hidden(),
@@ -31,7 +27,16 @@ export const Config: Schema<any, Config> = Schema.intersect([
       default: Schema.dynamic(ModelSchemaName)
         .default("deepseek/deepseek-chat")
         .description("当前模型，格式为 provider/model；列表由供应商自动获取"),
-      deepseek: Schema.object({ ...provider, ...sampling }).description("DeepSeek"),
+      deepseek: Schema.object({
+        ...provider,
+        reasoningEffort: Schema.union(DeepSeekReasoningEfforts)
+          .description("可选推理强度；none 关闭思考，low/high/max 开启思考；留空使用供应商默认值（当前为 high）"),
+        temperature: Schema.number().min(0).max(2)
+          .description("可选 Temperature（0–2）；仅非思考模式生效，思考模式忽略；留空使用供应商默认值"),
+        // Schemastery 的 min 是闭区间，以最小正数表达大于 0。
+        topP: Schema.number().min(Number.MIN_VALUE).max(1)
+          .description("可选 Top P（大于 0 且不超过 1）；deepseek-flash 仅思考模式生效，低于 0.95 按 0.95 处理；deepseek-v4-pro 仅非思考模式生效；留空使用供应商默认值"),
+      }).description("DeepSeek"),
       openai: Schema.object({
         ...provider,
         api: Schema.union(["chat-completions", "responses"]).default("chat-completions").description("OpenAI API 类型"),
