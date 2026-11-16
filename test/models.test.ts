@@ -559,14 +559,20 @@ test("model catalog lists provider models through Koishi HTTP", async (t) => {
     assert.equal(request.method, "GET")
     assert.equal(request.url, "/models")
     assert.equal(request.headers.authorization, "Bearer private-api-key")
-    json(response, { object: "list", data: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }] })
+    json(response, {
+      object: "list",
+      data: [
+        { id: "deepseek-chat" },
+        { id: "deepseek-flash", input_modalities: ["text", "image"] },
+      ],
+    })
   })
   const ids = await Effect.runPromise(
     Effect.gen(function* () {
       return yield* listModels(yield* ModelHttp, "deepseek", { apiKey: key, baseUrl })
     }).pipe(Effect.provide(ModelHttpKoishi(app.http))),
   )
-  assert.deepEqual(ids, ["deepseek-chat", "deepseek-reasoner"])
+  assert.deepEqual(ids, [{ id: "deepseek-chat" }, { id: "deepseek-flash", imageInput: true }])
 })
 
 test("model catalog reports provider authentication failures", async (t) => {
@@ -915,4 +921,124 @@ test("catalog failures log sanitized diagnostics while preserving other provider
   assert.ok(messages.includes("Authentication HTTP 403"))
   assert.ok(!messages.includes("private-api-key"))
   assert.ok(!messages.includes("provider-secret"))
+})
+
+const imageInput: ModelInput = {
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "看图" },
+        {
+          type: "image",
+          sha256: "a".repeat(64),
+          mimeType: "image/png",
+          byteLength: 3,
+          data: Redacted.make("YWJj"),
+        },
+      ],
+    },
+  ],
+}
+
+test("DeepSeek encodes inline images and reports content-safety refusals as incomplete", async (t) => {
+  const bodies: unknown[] = []
+  let refusal: string | null = null
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      bodies.push(body)
+      json(response, {
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { role: "assistant", content: refusal === null ? "hello" : null, refusal },
+          },
+        ],
+      })
+    })
+  })
+  const model = ModelGatewayDeepSeek({ baseUrl, apiKey: key, model: "deepseek-flash", timeoutMs: 1000 })
+  assert.deepEqual(await Effect.runPromise(generate(model, app.http, imageInput)), { text: "hello" })
+  assert.deepEqual(bodies.at(-1), {
+    model: "deepseek-flash",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "看图" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,YWJj" } },
+        ],
+      },
+    ],
+  })
+  refusal = "The following images were blocked by content moderation"
+  assert.equal(await errorKind(generate(model, app.http, imageInput)), "IncompleteResponse")
+})
+
+test("Gemini and Responses map inline image parts to their native content blocks", async (t) => {
+  const geminiBodies: unknown[] = []
+  const geminiFixture = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      geminiBodies.push(body)
+      json(response, geminiResponse([{ text: "seen" }]))
+    })
+  })
+  const gemini = ModelGatewayGemini({
+    baseUrl: `${geminiFixture.baseUrl}/v1beta`,
+    apiKey: key,
+    model: "gemini-test",
+    timeoutMs: 1000,
+  })
+  assert.deepEqual(await Effect.runPromise(generate(gemini, geminiFixture.app.http, imageInput)), { text: "seen" })
+  assert.deepEqual((geminiBodies.at(-1) as { contents: { parts: unknown[] }[] }).contents[0]?.parts, [
+    { text: "看图" },
+    { inlineData: { mimeType: "image/png", data: "YWJj" } },
+  ])
+
+  const responsesBodies: { input: { content: unknown[] }[] }[] = []
+  const responsesFixture = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      responsesBodies.push(body as { input: { content: unknown[] }[] })
+      json(response, {
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "seen" }],
+          },
+        ],
+      })
+    })
+  })
+  const openai = ModelGatewayOpenAI({
+    baseUrl: responsesFixture.baseUrl,
+    apiKey: key,
+    model: "gpt-test",
+    timeoutMs: 1000,
+  })
+  assert.deepEqual(await Effect.runPromise(generate(openai, responsesFixture.app.http, imageInput)), { text: "seen" })
+  assert.deepEqual(responsesBodies.at(-1)?.input[0]?.content, [
+    { type: "input_text", text: "看图" },
+    { type: "input_image", image_url: "data:image/png;base64,YWJj", detail: "auto" },
+  ])
+})
+
+test("gateways expose the model image capability used by the dialogue window", async (t) => {
+  const { app, baseUrl } = await fixture(t, (_request, response) => json(response, {}))
+  const capabilities = await Effect.runPromise(
+    Effect.gen(function* () {
+      return (yield* ModelGateway).capabilities
+    }).pipe(
+      Effect.provide(
+        ModelGatewayDeepSeek(
+          { baseUrl, apiKey: key, model: "deepseek-flash", timeoutMs: 1000 },
+          { imageInput: false },
+        ).pipe(Layer.provide(ModelHttpKoishi(app.http))),
+      ),
+    ),
+  )
+  assert.deepEqual(capabilities, { imageInput: false })
 })

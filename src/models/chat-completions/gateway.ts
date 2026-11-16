@@ -1,5 +1,5 @@
 import { Array as Arr, Effect, Layer, Redacted, Schema } from "effect"
-import { ModelGateway } from "../gateway"
+import { ModelGateway, type ModelCapabilities } from "../gateway"
 import { ModelError } from "../model"
 import type { ReasoningEffort } from "../deepseek/config"
 import type { ChatCompletionsConfig } from "./config"
@@ -9,12 +9,15 @@ import { Completion, ToolCalls } from "./protocol"
 
 export const ModelGatewayChatCompletions = (
   config: ChatCompletionsConfig & { readonly baseUrl: string; readonly reasoningEffort?: ReasoningEffort },
+  // DeepSeek Flash 原生支持图片；具体模型由调用方按模型目录声明覆盖。
+  capabilities: ModelCapabilities = { imageInput: true },
 ) =>
   Layer.effect(
     ModelGateway,
     Effect.gen(function* () {
       const http = yield* ModelHttp
       return ModelGateway.of({
+        capabilities,
         generate: Effect.fn("ModelGatewayChatCompletions.generate")(
           function* (input) {
             const messages = yield* requestMessages(input)
@@ -42,14 +45,15 @@ export const ModelGatewayChatCompletions = (
             if (completion.choices.length !== 1 || choice === undefined)
               return yield* Effect.fail(new ModelError({ kind: "InvalidResponse" }))
             // 思考模式带工具时须续接原始推理；仅保存在不透明字段中，不进入角色正文或调用记录。
-            const continuation = input.tools === undefined || choice.message.reasoning_content == null
-              ? {}
-              : {
-                  continuation: Redacted.make({
-                    api: "chat-completions",
-                    reasoning_content: choice.message.reasoning_content,
-                  }),
-                }
+            const continuation =
+              input.tools === undefined || choice.message.reasoning_content == null
+                ? {}
+                : {
+                    continuation: Redacted.make({
+                      api: "chat-completions",
+                      reasoning_content: choice.message.reasoning_content,
+                    }),
+                  }
             if (choice.finish_reason === "tool_calls" && input.tools !== undefined) {
               const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(choice.message.tool_calls).pipe(
                 Effect.mapError(() => new ModelError({ kind: "InvalidResponse" })),
@@ -72,6 +76,10 @@ export const ModelGatewayChatCompletions = (
               }
             }
             if (choice.finish_reason !== "stop" || (choice.message.tool_calls?.length ?? 0) !== 0) {
+              return yield* Effect.fail(new ModelError({ kind: "IncompleteResponse" }))
+            }
+            // 图片未通过内容审核时正文被剥离，按未完成响应处理，不把拒答说明当角色发言。
+            if (choice.message.refusal != null && choice.message.refusal !== "") {
               return yield* Effect.fail(new ModelError({ kind: "IncompleteResponse" }))
             }
             const text = choice.message.content

@@ -1,5 +1,5 @@
 import { Array as Arr, Effect, Layer, Redacted, Schema } from "effect"
-import { ModelGateway } from "../gateway"
+import { ModelGateway, type ModelCapabilities } from "../gateway"
 import { ModelHttp } from "../http/client"
 import { ModelError } from "../model"
 import { DefaultBaseUrl } from "../provider"
@@ -10,7 +10,10 @@ import { GenerateContentResponse, ModelContent } from "./protocol"
 const invalid = () => new ModelError({ kind: "InvalidResponse" })
 const incomplete = () => new ModelError({ kind: "IncompleteResponse" })
 
-export const ModelGatewayGemini = (config: GeminiConfig) =>
+export const ModelGatewayGemini = (
+  config: GeminiConfig,
+  capabilities: ModelCapabilities = { imageInput: true },
+) =>
   Layer.effect(
     ModelGateway,
     Effect.gen(function* () {
@@ -18,6 +21,7 @@ export const ModelGatewayGemini = (config: GeminiConfig) =>
       const baseUrl = (config.baseUrl ?? DefaultBaseUrl.gemini).replace(/\/+$/, "")
       const model = config.model.replace(/^models\//, "")
       return ModelGateway.of({
+        capabilities,
         generate: Effect.fn("ModelGatewayGemini.generate")(
           function* (input) {
             const contents = yield* requestContents(input)

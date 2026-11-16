@@ -1,6 +1,6 @@
 import { Array as Arr, Effect, Layer, Redacted, Schema } from "effect"
-import { ModelGateway } from "../gateway"
-import { ModelError, type ModelInput } from "../model"
+import { ModelGateway, type ModelCapabilities } from "../gateway"
+import { ModelError, type ModelInput, type ModelUserContent } from "../model"
 import type { OpenAIConfig } from "../openai/config"
 import { ModelHttp } from "../http/client"
 
@@ -44,6 +44,19 @@ const Continuation = Schema.Struct({ api: Schema.Literal("openai-responses"), ou
 const invalid = () => new ModelError({ kind: "InvalidResponse" })
 const incomplete = () => new ModelError({ kind: "IncompleteResponse" })
 
+const userContent = (content: ModelUserContent) => {
+  if (typeof content === "string") return content
+  return content.map((part) =>
+    part.type === "text"
+      ? { type: "input_text", text: part.text }
+      : {
+          type: "input_image",
+          image_url: `data:${part.mimeType};base64,${Redacted.value(part.data)}`,
+          detail: "auto",
+        },
+  )
+}
+
 const requestInput = (input: ModelInput) =>
   Effect.forEach(input.messages, (message): Effect.Effect<ReadonlyArray<unknown>, ModelError> => {
     if (message.role === "tool")
@@ -64,15 +77,19 @@ const requestInput = (input: ModelInput) =>
         })),
       ])
     }
-    return Effect.succeed([{ role: message.role, content: message.content }])
+    return Effect.succeed([{ role: message.role, content: userContent(message.content) }])
   }).pipe(Effect.map((items) => items.flat()))
 
-export const ModelGatewayResponses = (config: OpenAIConfig & { readonly baseUrl: string }) =>
+export const ModelGatewayResponses = (
+  config: OpenAIConfig & { readonly baseUrl: string },
+  capabilities: ModelCapabilities = { imageInput: true },
+) =>
   Layer.effect(
     ModelGateway,
     Effect.gen(function* () {
       const http = yield* ModelHttp
       return ModelGateway.of({
+        capabilities,
         generate: Effect.fn("ModelGatewayResponses.generate")(
           function* (input) {
             const items = yield* requestInput(input)

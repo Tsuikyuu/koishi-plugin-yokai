@@ -9,6 +9,8 @@ export const Completion = Schema.Struct({
         content: Schema.NullOr(Schema.String),
         reasoning_content: Schema.optionalKey(Schema.NullOr(Schema.String)),
         tool_calls: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.Unknown))),
+        // 图片未通过供应商内容审核时返回拒答说明，正文会被剥离。
+        refusal: Schema.optionalKey(Schema.NullOr(Schema.String)),
       }),
     }),
   ),

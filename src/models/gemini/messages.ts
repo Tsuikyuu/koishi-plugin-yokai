@@ -1,9 +1,18 @@
 import { Effect, Redacted, Schema } from "effect"
-import { ModelError, type ModelInput } from "../model"
+import { ModelError, type ModelInput, type ModelUserContent } from "../model"
 import { Continuation, type Content } from "./protocol"
 
 const invalid = () => new ModelError({ kind: "InvalidResponse" })
 const parseArguments = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))
+
+const userParts = (content: ModelUserContent) =>
+  typeof content === "string"
+    ? [{ text: content }]
+    : content.map((part) =>
+        part.type === "text"
+          ? { text: part.text }
+          : { inlineData: { mimeType: part.mimeType, data: Redacted.value(part.data) } },
+      )
 
 export const requestContents = Effect.fn("Gemini.requestContents")(function* (input: ModelInput) {
   let contents: ReadonlyArray<Content> = []
@@ -57,7 +66,7 @@ export const requestContents = Effect.fn("Gemini.requestContents")(function* (in
           : [...contents, { role: "user", parts: [part] }]
       continue
     }
-    contents = [...contents, { role: "user", parts: [{ text: message.content }] }]
+    contents = [...contents, { role: "user", parts: userParts(message.content) }]
   }
   return contents
 })

@@ -1,5 +1,16 @@
 import { join } from "node:path"
-import { Cause, Context as Services, Effect, Exit, Fiber, FiberSet, Layer, Schema, Semaphore } from "effect"
+import {
+  Cause,
+  Context as Services,
+  Effect,
+  Exit,
+  Fiber,
+  FiberSet,
+  Layer,
+  Ref,
+  Schema,
+  Semaphore,
+} from "effect"
 import type { Context, Session } from "koishi"
 import type { Config } from "../config/schema"
 import { resolveConfig, resolveModel } from "../config/resolve"
@@ -23,7 +34,7 @@ import { databaseLayer } from "./database"
 import { createKoishiHistory, keyOf } from "../channels/koishi-history"
 import { loggerLayer } from "./logger"
 import { ModelHttpKoishi } from "../models/http/koishi-client"
-import { watchModelSchema } from "./model-schema"
+import { makeImageSupport, watchModelSchema } from "./model-schema"
 import { ModelGatewayDeepSeek } from "../models/deepseek/gateway"
 import { ModelGatewayOpenAI } from "../models/openai/gateway"
 import { ModelGatewayGemini } from "../models/gemini/gateway"
@@ -44,18 +55,23 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         ),
       )
       const http = ModelHttpKoishi(ctx.http)
+      const imageSupport = yield* makeImageSupport()
       // 模型列表是控制台输入选项，失败只影响可选项，不阻断插件启动。
-      yield* watchModelSchema(ctx, raw.models).pipe(Effect.provide(http))
+      yield* watchModelSchema(ctx, raw.models, imageSupport).pipe(Effect.provide(http))
       const catalog = () => CharacterCatalogLocal(config.directory, config.presets)
       const modelLayer = Effect.gen(function* () {
         const selected = yield* resolveModel(raw.models)
-        yield* Effect.logDebug(`选用模型 ${selected.provider}/${selected.model}`)
+        const imageInput = (yield* Ref.get(imageSupport)).get(`${selected.provider}/${selected.model}`) ?? true
+        yield* Effect.logDebug(
+          `选用模型 ${selected.provider}/${selected.model}（图片输入${imageInput ? "已启用" : "不受支持，本轮不附带图片"}）`,
+        )
+        const capabilities = { imageInput }
         const gateway =
           selected.provider === "deepseek"
-            ? ModelGatewayDeepSeek(selected)
+            ? ModelGatewayDeepSeek(selected, capabilities)
             : selected.provider === "gemini"
-              ? ModelGatewayGemini(selected)
-              : ModelGatewayOpenAI(selected)
+              ? ModelGatewayGemini(selected, capabilities)
+              : ModelGatewayOpenAI(selected, capabilities)
         return ModelGatewayRecorded(selected.model).pipe(Layer.provide(gateway.pipe(Layer.provide(http))))
       })
       const channels = Services.get(base, ChannelStore)

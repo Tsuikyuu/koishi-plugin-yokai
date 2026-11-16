@@ -71,7 +71,14 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
           catch: (error) => new InvalidReply({ reason: error instanceof Error ? error.message : "角色上下文组装失败" }),
         })
         yield* Effect.logDebug(
-          `上下文组装完成，消息 ${context.messages.length} 条，共 ${context.messages.reduce((sum, message) => sum + message.content.length, 0)} 字符`,
+          `上下文组装完成，消息 ${context.messages.length} 条，共 ${context.messages.reduce(
+            (sum, message) =>
+              sum +
+              (typeof message.content === "string"
+                ? message.content.length
+                : message.content.reduce((count, part) => count + (part.type === "text" ? part.text.length : 0), 0)),
+            0,
+          )} 字符`,
         )
         const output = yield* generateChannelResponse(
           channel,

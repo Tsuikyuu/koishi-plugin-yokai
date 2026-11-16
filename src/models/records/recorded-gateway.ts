@@ -11,6 +11,7 @@ export const ModelGatewayRecorded = (modelName: string) =>
       const gateway = yield* ModelGateway
       const traces = yield* ModelTraceStore
       return ModelGateway.of({
+        capabilities: gateway.capabilities,
         generate: (input) =>
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
