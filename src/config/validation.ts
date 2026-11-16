@@ -52,7 +52,7 @@ export const DeepSeekProviderConfig = Schema.Struct({
 export type DeepSeekProviderConfig = typeof DeepSeekProviderConfig.Type
 export const OpenAIProviderConfig = Schema.Struct({
   ...providerFields,
-  api: Schema.optionalKey(Schema.Literals(["chat-completions", "responses"])),
+  api: Schema.optionalKey(Schema.Literal("responses")),
   reasoningEffort: Schema.optionalKey(ReasoningEffort),
 })
 export type OpenAIProviderConfig = typeof OpenAIProviderConfig.Type

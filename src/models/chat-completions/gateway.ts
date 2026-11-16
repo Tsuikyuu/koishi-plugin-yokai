@@ -1,7 +1,7 @@
 import { Array as Arr, Effect, Layer, Redacted, Schema } from "effect"
 import { ModelGateway } from "../gateway"
 import { ModelError } from "../model"
-import type { ReasoningEffort } from "../openai/config"
+import type { ReasoningEffort } from "../deepseek/config"
 import type { ChatCompletionsConfig } from "./config"
 import { ModelHttp } from "../http/client"
 import { requestMessages } from "./messages"

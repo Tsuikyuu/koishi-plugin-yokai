@@ -301,6 +301,45 @@ test("DeepSeek rejects malformed reasoning and continuation without leaking prov
   assert.equal(requests, before)
 })
 
+test("OpenAI uses Responses with explicit or omitted API settings", async (t) => {
+  const requests: { readonly url: string | undefined; readonly body: unknown }[] = []
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      requests.push({ url: request.url, body })
+      json(response, { status: "completed", output: [{
+        type: "message", role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: "hello" }],
+      }] })
+    })
+  })
+  const cases: {
+    readonly settings: NonNullable<Config["models"]["openai"]>
+    readonly wire: object
+  }[] = [
+    { settings: { api: "responses" }, wire: {} },
+    { settings: {}, wire: {} },
+  ]
+  for (const { settings, wire } of cases) {
+    const raw = Config({
+      models: { default: "openai/gpt-test", openai: { baseUrl, apiKey: "private-api-key", ...settings } },
+    })
+    const resolved = await Effect.runPromise(resolveModel(raw.models))
+    assert.equal(resolved.provider, "openai")
+    assert.deepEqual(await Effect.runPromise(generate(ModelGatewayOpenAI(resolved), app.http)), { text: "hello" })
+    assert.deepEqual(requests.at(-1), {
+      url: "/responses",
+      body: {
+        model: "gpt-test",
+        stream: false,
+        store: false,
+        input: input.messages,
+        include: ["reasoning.encrypted_content"],
+        ...wire,
+      },
+    })
+  }
+})
+
 test("Responses preserves tool calls and encrypted continuation through Koishi HTTP", async (t) => {
   const bodies: unknown[] = []
   const output = [
@@ -332,7 +371,6 @@ test("Responses preserves tool calls and encrypted continuation through Koishi H
     baseUrl,
     apiKey: key,
     model: "gpt-test",
-    api: "responses",
     timeoutMs: 1000,
     reasoningEffort: "low",
   })

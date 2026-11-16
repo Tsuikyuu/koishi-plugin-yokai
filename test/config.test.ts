@@ -129,6 +129,33 @@ test("DeepSeek validates output-token and stop-sequence limits through both conf
   }
 })
 
+test("OpenAI defaults to Responses while accepting explicit Responses configuration", async () => {
+  const cases: NonNullable<Config["models"]["openai"]>[] = [
+    { api: "responses" },
+    {},
+  ]
+  for (const settings of cases) {
+    const raw = Config({
+      models: { default: "openai/gpt-test", openai: { apiKey: "fixture-secret", ...settings } },
+    })
+    const resolved = await Effect.runPromise(resolveModel(raw.models))
+    assert.equal(resolved.provider, "openai")
+    assert.equal(resolved.api, "responses")
+    assert.equal(resolved.reasoningEffort, settings.reasoningEffort)
+    assert.ok(!JSON.stringify(resolved).includes("fixture-secret"))
+  }
+})
+
+test("OpenAI rejects the unsupported Chat Completions API", async () => {
+  for (const settings of [
+    { api: "chat-completions" },
+  ]) {
+    const models = { default: "openai/gpt-test", openai: { apiKey: "fixture-secret", ...settings } }
+    assert.throws(() => Config({ models }))
+    assert.equal((await Effect.runPromiseExit(resolveModel(models as Config["models"])))._tag, "Failure")
+  }
+})
+
 test("Gemini configuration resolves independently through the Koishi schema", async () => {
   const raw = Config({
     ...config,

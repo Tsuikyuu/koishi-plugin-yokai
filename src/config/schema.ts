@@ -43,7 +43,8 @@ export const Config: Schema<any, Config> = Schema.intersect([
       }).description("DeepSeek"),
       openai: Schema.object({
         ...provider,
-        api: Schema.union(["chat-completions", "responses"]).default("chat-completions").description("OpenAI API 类型"),
+        // 接受已保存的 Responses 配置，控制台不再提供接口选择。
+        api: Schema.const("responses").default("responses").hidden(),
         reasoningEffort: Schema.union(ReasoningEfforts).description("可选推理强度，仅用于支持的模型"),
       }).description("OpenAI"),
       gemini: Schema.object({
