@@ -22,7 +22,7 @@ import { databaseLayer } from "./database"
 import { createKoishiHistory, keyOf } from "../channels/koishi-history"
 import { loggerLayer } from "./logger"
 import { ModelHttpKoishi } from "../models/http/koishi-client"
-import { registerModelSchema } from "./model-schema"
+import { watchModelSchema } from "./model-schema"
 import { ModelGatewayDeepSeek } from "../models/deepseek/gateway"
 import { ModelGatewayOpenAI } from "../models/openai/gateway"
 import { ModelGatewayGemini } from "../models/gemini/gateway"
@@ -44,7 +44,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       )
       const http = ModelHttpKoishi(ctx.http)
       // 模型列表是控制台输入选项，失败只影响可选项，不阻断插件启动。
-      yield* registerModelSchema(ctx, raw.models).pipe(Effect.provide(http), Effect.forkScoped)
+      yield* watchModelSchema(ctx, raw.models).pipe(Effect.provide(http))
       const catalog = () => CharacterCatalogLocal(config.directory, config.presets)
       const modelLayer = Effect.gen(function* () {
         const selected = yield* resolveModel(raw.models)

@@ -46,7 +46,7 @@ roleplay:
 
 这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `temperature` 和 `topP`，OpenAI 提供 `api` 和 `reasoningEffort`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
 
-`models.default` 不再手动输入：插件启动时用已填写密钥的供应商请求 `{baseUrl}/models`，把返回的 `provider/model` 注册为控制台下拉选项，当前配置值始终保留在选项中。请求失败只影响可选项，不阻断启动；修改供应商密钥或地址后重载插件以刷新列表。插件未运行时（例如尚未启用）没有列表可注册，控制台显示回退输入框。
+`models.default` 不再手动输入：插件启动时用已填写密钥的供应商请求 `{baseUrl}/models`，把返回的 `provider/model` 注册为控制台下拉选项，当前配置值始终保留在选项中。保存模型配置后自动刷新列表，包含供应商密钥和地址的修改；新一轮刷新会中断过时请求。请求失败只影响可选项，不阻断启动，并在后台日志显示供应商及脱敏错误类别。插件未运行时（例如尚未启用）没有列表可注册，控制台显示回退输入框。
 
 使用 Gemini 时填写 `models.gemini.apiKey`，并选择 `gemini/<模型 ID>`。原生 API 默认根地址为 `https://generativelanguage.googleapis.com/v1beta`；自定义 `baseUrl` 需包含 API 版本，不包含 `/models`。通过 `x-goog-api-key` 请求头认证，使用非流式 `generateContent`，支持系统指令、文本和多轮工具调用。模型列表自动翻页，仅显示支持 `generateContent` 的模型。工具循环保留原始 `thoughtSignature`；推理正文和签名不会进入角色回复或调用记录。
 

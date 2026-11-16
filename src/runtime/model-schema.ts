@@ -1,6 +1,6 @@
 import { Schema } from "koishi"
 import type { Context } from "koishi"
-import { Cause, Effect, Redacted } from "effect"
+import { Cause, Effect, FiberHandle, Option, Redacted } from "effect"
 import { ModelSchemaName, type Config } from "../config/schema"
 import { listModels } from "../models/catalog"
 import { ModelHttp } from "../models/http/client"
@@ -25,22 +25,46 @@ const candidates = (models: Config["models"]): Candidate[] =>
 const catalogSchema = (ids: readonly string[]) =>
   Schema.union([...new Set(ids)].map((id) => Schema.const(id).description(id)))
 
-// 先注册当前值，网络返回后再补全列表；失败时仍保留当前值可选。
-export const registerModelSchema = (ctx: Context, models: Config["models"]) => {
-  ctx.schema.set(ModelSchemaName, catalogSchema([models.default]))
-  return Effect.gen(function* () {
+// 固定本次配置快照；网络返回前及失败时仍保留当前值可选。
+export const registerModelSchema = Effect.fn("Yokai.registerModelSchema")(
+  function* (ctx: Context, models: Config["models"]) {
+    const selected = models.default
+    const sources = candidates(models)
+    yield* Effect.sync(() => ctx.schema.set(ModelSchemaName, catalogSchema([selected])))
     const http = yield* ModelHttp
     const groups = yield* Effect.forEach(
-      candidates(models),
+      sources,
       (candidate) =>
         listModels(http, candidate.provider, candidate).pipe(
+          Effect.tap((ids) => Effect.logDebug(`已获取 ${candidate.provider} 模型列表：${ids.length} 个`)),
           Effect.map((ids) => ids.map((id) => `${candidate.provider}/${id}`)),
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.succeed([] as string[]),
-          ),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterrupts(cause)) return Effect.failCause(cause)
+            const failure = Cause.findErrorOption(cause)
+            const reason = Option.isSome(failure)
+              ? `${failure.value.kind}${failure.value.status === undefined ? "" : ` HTTP ${failure.value.status}`}`
+              : "内部错误"
+            return Effect.logWarning(`获取 ${candidate.provider} 模型列表失败：${reason}`).pipe(
+              Effect.as([] as string[]),
+            )
+          }),
         ),
       { concurrency: "unbounded" },
     )
-    ctx.schema.set(ModelSchemaName, catalogSchema([models.default, ...groups.flat()]))
-  })
-}
+    yield* Effect.sync(() => ctx.schema.set(ModelSchemaName, catalogSchema([selected, ...groups.flat()])))
+  },
+)
+
+// Koishi 的“重载”可能只更新响应式配置；更新时重取列表，并中断过时请求。
+export const watchModelSchema = Effect.fn("Yokai.watchModelSchema")(
+  function* (ctx: Context, models: Config["models"]) {
+    const run = yield* FiberHandle.makeRuntime<ModelHttp>()
+    yield* Effect.acquireRelease(
+      Effect.sync(() => ctx.accept(["models"], (updated: Config) => {
+        run(registerModelSchema(ctx, updated.models))
+      })),
+      (dispose) => Effect.sync(() => { dispose() }),
+    )
+    yield* Effect.sync(() => { run(registerModelSchema(ctx, models)) })
+  },
+)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import test, { type TestContext } from "node:test"
 import { App, HTTP } from "koishi"
-import { Cause, Effect, Exit, Fiber, Layer, Option, Redacted } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Logger, ManagedRuntime, Option, Redacted } from "effect"
 import { ModelGateway } from "../src/models/gateway"
 import type { ModelInput } from "../src/models/model"
 import { ModelGatewayDeepSeek } from "../src/models/deepseek/gateway"
@@ -12,7 +12,7 @@ import { ModelHttp } from "../src/models/http/client"
 import { listModels } from "../src/models/catalog"
 import { ModelHttpKoishi } from "../src/models/http/koishi-client"
 import { notebookQueryTool } from "../src/dialogue/tools/notebook-query"
-import { registerModelSchema } from "../src/runtime/model-schema"
+import { registerModelSchema, watchModelSchema } from "../src/runtime/model-schema"
 import { Config, ModelSchemaName } from "../src/config/schema"
 import { resolveModel } from "../src/config/resolve"
 
@@ -554,4 +554,105 @@ test("Gemini total timeout aborts the native HTTP response", async (t) => {
     app.http,
   )), "Timeout")
   await closed
+})
+
+test("reactive catalog updates discover new credentials and cancel obsolete or disposed requests", { timeout: 10000 }, async (t) => {
+  const deferred = () => {
+    let resolve = () => {}
+    const promise = new Promise<void>((complete) => { resolve = complete })
+    return { promise, resolve }
+  }
+  let received = deferred()
+  let closed = deferred()
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    if (request.url === "/openai/models") return json(response, { data: [{ id: "available" }] })
+    if (request.url === "/old/models") {
+      response.on("close", closed.resolve)
+      received.resolve()
+      return
+    }
+    assert.equal(request.url, "/new/models")
+    assert.equal(request.headers["x-goog-api-key"], "updated-key")
+    json(response, { models: [{ name: "models/new-model", supportedGenerationMethods: ["generateContent"] }] })
+  })
+  const options = () => (app.schema.get(ModelSchemaName).list ?? []).map((option) => option.value as string)
+  const waitForOptions = (expected: readonly string[]) => {
+    if (JSON.stringify(options()) === JSON.stringify(expected)) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const dispose = app.on("internal/schema", (name) => {
+        if (name !== ModelSchemaName || JSON.stringify(options()) !== JSON.stringify(expected)) return
+        dispose()
+        resolve()
+      })
+    })
+  }
+  let starts = 0
+  const plugin = {
+    name: "catalog-fixture",
+    reactive: true,
+    Config,
+    apply: async (ctx: App, config: Config) => {
+      starts++
+      const runtime = ManagedRuntime.make(Layer.effectDiscard(
+        watchModelSchema(ctx, config.models).pipe(Effect.provide(ModelHttpKoishi(ctx.http))),
+      ))
+      ctx.on("dispose", () => runtime.dispose())
+      await runtime.runPromise(Effect.void)
+    },
+  }
+  const config = Config({
+    models: {
+      default: "openai/current",
+      openai: { baseUrl: `${baseUrl}/openai`, apiKey: "private-api-key" },
+    },
+  })
+  const fork = app.plugin(plugin, config)
+  assert.ok(fork)
+  const original = ["openai/current", "openai/available"]
+  await waitForOptions(original)
+  const withGemini = (path: string, apiKey: string) => ({
+    ...config,
+    models: { ...config.models, gemini: { baseUrl: `${baseUrl}/${path}`, apiKey } },
+  })
+  fork.update(withGemini("old", "old-key"))
+  await received.promise
+  fork.update(withGemini("new", "updated-key"))
+  await closed.promise
+  await waitForOptions([...original, "gemini/new-model"])
+  assert.equal(starts, 1)
+  fork.update(config)
+  await waitForOptions(original)
+
+  received = deferred()
+  closed = deferred()
+  fork.update(withGemini("old", "old-key"))
+  await received.promise
+  fork.dispose()
+  await closed.promise
+  await app.lifecycle.flush()
+  assert.equal(starts, 1)
+  assert.deepEqual(options(), [])
+})
+
+test("catalog failures log sanitized diagnostics while preserving other providers and the selected model", async (t) => {
+  const logs: unknown[] = []
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    if (request.url === "/openai/models") return json(response, { data: [{ id: "available" }] })
+    response.statusCode = 403
+    json(response, { error: { message: "provider-secret private-api-key" } })
+  })
+  await Effect.runPromise(registerModelSchema(app, {
+    default: "gemini/current",
+    gemini: { baseUrl, apiKey: "private-api-key" },
+    openai: { baseUrl: `${baseUrl}/openai`, apiKey: "private-api-key" },
+  }).pipe(
+    Effect.provide(ModelHttpKoishi(app.http)),
+    Effect.provide(Logger.layer([Logger.make(({ message }) => { logs.push(message) })])),
+  ))
+  assert.deepEqual(app.schema.get(ModelSchemaName).list?.map((option) => option.value), ["gemini/current", "openai/available"])
+  const messages = JSON.stringify(logs)
+  assert.ok(messages.includes("gemini"))
+  assert.ok(messages.includes("Authentication HTTP 403"))
+  assert.ok(!messages.includes("private-api-key"))
+  assert.ok(!messages.includes("provider-secret"))
 })
