@@ -1,10 +1,14 @@
 import { SaxesParser } from "saxes"
 import { ResponseParseError } from "./parser"
 
+type Segment = { readonly kind: "text"; readonly value: string } | { readonly kind: "element"; readonly node: Node }
+
 interface Node {
   readonly name: string
   readonly attributes: Readonly<Record<string, string>>
   readonly children: Node[]
+  // 文本与子元素的交错顺序；message 内联 <at /> 依赖该顺序。
+  readonly segments: Segment[]
   text: string
 }
 export const invalid = (): never => {
@@ -28,6 +32,27 @@ export const text = (node: Node) => {
   return node.text
 }
 
+// message 仅允许文本与空元素 <at user="..." /> 交错出现。
+export const messageSegments = (
+  node: Node,
+): ReadonlyArray<{ readonly text: string } | { readonly at: string }> => {
+  const result: Array<{ readonly text: string } | { readonly at: string }> = []
+  for (const segment of node.segments) {
+    if (segment.kind === "text") {
+      result.push({ text: segment.value })
+      continue
+    }
+    const child = segment.node
+    if (child.name !== "at") invalid()
+    if (child.children.length !== 0 || child.text.trim() !== "") invalid()
+    attributes(child, ["user"])
+    const user = child.attributes.user
+    if (user === undefined) return invalid()
+    result.push({ at: user })
+  }
+  return result
+}
+
 // 两个阶段的响应共用 XML 读取；动作与状态语义分别由各自解析器处理。
 export const responseSections = (xml: string): readonly [Node, Node, Node] => {
   if (new TextEncoder().encode(xml).length > 1024 * 1024) invalid()
@@ -48,17 +73,23 @@ export const responseSections = (xml: string): readonly [Node, Node, Node] => {
       })
     }
     if (stack.length >= 16) invalid()
-    const node: Node = { name: tag.name, attributes: tag.attributes, children: [], text: "" }
+    const node: Node = { name: tag.name, attributes: tag.attributes, children: [], segments: [], text: "" }
     const parent = stack.at(-1)
     if (parent === undefined) roots.push(node)
-    else parent.children.push(node)
+    else {
+      parent.children.push(node)
+      parent.segments.push({ kind: "element", node })
+    }
     stack.push(node)
   })
   const addText = (value: string) => {
     const node = stack.at(-1)
     if (node === undefined) {
       if (value.trim() !== "") invalid()
-    } else node.text += value
+    } else {
+      node.text += value
+      node.segments.push({ kind: "text", value })
+    }
   }
   parser.on("text", addText)
   parser.on("cdata", addText)

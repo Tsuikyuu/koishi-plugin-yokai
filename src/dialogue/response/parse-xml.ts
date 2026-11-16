@@ -1,7 +1,33 @@
 import { Effect, Schema } from "effect"
 import { ChannelResponse } from "./response"
 import { ResponseParseError, type ChannelResponseParser } from "./parser"
-import { attributes, container, invalid, responseSections, text } from "./xml-reader"
+import { attributes, container, invalid, messageSegments, responseSections, text } from "./xml-reader"
+
+type MessageSegment = { readonly text: string } | { readonly at: string }
+type OutboundPart = { readonly type: "text"; readonly text: string } | { readonly type: "at"; readonly user: string }
+
+// 去掉首尾标注用的空白与空文本片段；正文内部的空白保持原样。
+const trimParts = (segments: ReadonlyArray<MessageSegment>): ReadonlyArray<OutboundPart> => {
+  const first = segments.findIndex((segment) => "text" in segment)
+  let last = -1
+  for (let index = segments.length - 1; index >= 0; index--) {
+    if ("text" in segments[index]!) {
+      last = index
+      break
+    }
+  }
+  const parts: OutboundPart[] = []
+  for (const [index, segment] of segments.entries()) {
+    if ("at" in segment) {
+      parts.push({ type: "at", user: segment.at })
+      continue
+    }
+    const start = index === first ? segment.text.trimStart() : segment.text
+    const text = index === last ? start.trimEnd() : start
+    if (text !== "") parts.push({ type: "text", text })
+  }
+  return parts
+}
 
 // 纯解析供提示词中的预设示例复用；运行时入口将解析失败映射为类型化错误。
 export const decodeChannelResponse = (xml: string): ChannelResponse => {
@@ -9,10 +35,20 @@ export const decodeChannelResponse = (xml: string): ChannelResponse => {
   attributes(think)
   const parsedActions = container(actions).map((node, index) => {
     switch (node.name) {
-      case "message":
+      case "message": {
         attributes(node, [], ["quote"])
-        return { type: "message", text: text(node), ...node.attributes }
-      case "note-add":
+        const parts = trimParts(messageSegments(node))
+        if (parts.length === 0) return invalid()
+        const quote = node.attributes.quote
+        return { type: "message", parts, ...(quote === undefined ? {} : { quote }) }
+      }
+      case "sticker": {
+        attributes(node, ["id"], ["quote"])
+        text(node)
+        const quote = node.attributes.quote
+        return { type: "sticker", stickerId: node.attributes.id, ...(quote === undefined ? {} : { quote }) }
+      }
+      case "note-add": {
         attributes(node, [], ["supplements", "corrects"])
         const links = (["supplements", "corrects"] as const).flatMap((kind) => {
           const ids = node.attributes[kind]
@@ -25,6 +61,7 @@ export const decodeChannelResponse = (xml: string): ChannelResponse => {
         })
         if (new Set(links.map((link) => link.noteId)).size !== links.length) return invalid()
         return { type: "note-add", text: text(node), ...(links.length === 0 ? {} : { links }) }
+      }
       case "routine": {
         attributes(node, ["start", "end"])
         const start = node.attributes.start
@@ -54,7 +91,7 @@ export const decodeChannelResponse = (xml: string): ChannelResponse => {
       }
       default:
         throw new ResponseParseError({
-          reason: `actions 包含不支持的元素 <${node.name}>；仅允许 message、note-add、routine 和 next-reply`,
+          reason: `actions 包含不支持的元素 <${node.name}>；仅允许 message、sticker、note-add、routine 和 next-reply`,
         })
     }
   })
@@ -79,6 +116,6 @@ export const parseChannelResponse: ChannelResponseParser = (xml) =>
         ? error
         : new ResponseParseError({
             reason:
-              "频道响应 XML 结构或字段无效：response 应依次包含 think、actions、status；message/note-add/routine 正文须为纯文本，笔记关联使用 supplements/corrects 属性，routine 使用 start/end 属性，next-reply 使用 type/user_id 属性",
+              "频道响应 XML 结构或字段无效：response 应依次包含 think、actions、status；message 正文为纯文本且只能内联 <at user=\"ID\" />，sticker 使用 id 属性，note-add 关联使用 supplements/corrects 属性，routine 使用 start/end 属性，next-reply 使用 type/user_id 属性",
           }),
   })

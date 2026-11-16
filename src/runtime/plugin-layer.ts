@@ -17,10 +17,15 @@ import { resolveConfig, resolveModel } from "../config/resolve"
 import { ChannelRoleplay, type ChannelReplyError } from "../dialogue/dialogue"
 import { ChannelRoleplayLive } from "../dialogue/execute"
 import { ChannelStore, ChannelStoreError } from "../channels/store"
+import { ChannelMediaStore } from "../channels/media"
+import { channelMediaStoreFile } from "../channels/file-media"
 import { makeChannelLock } from "../channels/lock"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutinesLive } from "../characters/generated-routines"
 import { CharacterRoutines } from "../characters/routines"
+import { CharacterStickers } from "../characters/sticker"
+import { characterStickersFile } from "../characters/file-stickers"
+import { StickerId } from "../characters/character"
 import { ChannelTriggers } from "../dialogue/next-reply/triggers"
 import { ChannelTriggersLive } from "../dialogue/next-reply/track-triggers"
 import { ModelGatewayRecorded } from "../models/records/recorded-gateway"
@@ -83,6 +88,18 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           characters.get,
         )
       }).pipe(Effect.provide(catalog()))
+      // 表情包与媒体目录由程序维护；启动时校验声明的 ID 都有唯一且有效的图片文件。
+      const stickerFiles = characterStickersFile(config.directory)
+      yield* Effect.forEach(
+        presets,
+        (preset) =>
+          stickerFiles.validate(
+            preset.character.id,
+            Object.keys(preset.character.stickers ?? {}).map((id) => Schema.decodeSync(StickerId)(id)),
+          ),
+        { discard: true },
+      )
+      const media = channelMediaStoreFile(ctx.http, join(config.dataDirectory, "media"), ctx.baseDir)
       const routines = config.routineEnabled
         ? Services.get(
             yield* Layer.build(
@@ -92,7 +109,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           )
         : undefined
       const triggers = yield* Layer.build(ChannelTriggersLive)
-      const history = yield* createKoishiHistory(ctx, databaseGate.withPermit)
+      const history = yield* createKoishiHistory(ctx, databaseGate.withPermit, media)
       const withChannel = yield* makeChannelLock
 
       // 频道锁内创建本轮模型与角色目录快照，文件预设每轮重新读取。
@@ -103,7 +120,15 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         Effect.gen(function* () {
           const model = yield* modelLayer
           const roleplay = ChannelRoleplayLive(config.timezone, routines).pipe(
-            Layer.provide(Layer.mergeAll(model, catalog(), history.channelPlatform(session))),
+            Layer.provide(
+              Layer.mergeAll(
+                model,
+                catalog(),
+                history.channelPlatform(session),
+                Layer.succeed(ChannelMediaStore, media),
+                Layer.succeed(CharacterStickers, stickerFiles),
+              ),
+            ),
           )
           return yield* Effect.flatMap(ChannelRoleplay, run).pipe(
             Effect.provide(roleplay),

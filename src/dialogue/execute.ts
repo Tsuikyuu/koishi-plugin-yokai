@@ -4,10 +4,12 @@ import { channelIdOf, type Channel, type ChannelKey } from "../channels/channel"
 import { type ChannelTrigger } from "./trigger"
 import { ChannelExecutionError, ChannelRoleplay } from "./dialogue"
 import { ChannelPlatform } from "../channels/messaging"
+import { ChannelMediaStore } from "../channels/media"
 import { ChannelNotFound, ChannelStore } from "../channels/store"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutines } from "../characters/routines"
 import { CharacterRoutineError } from "../characters/routine"
+import { CharacterStickers } from "../characters/sticker"
 import { ChannelTriggers } from "./next-reply/triggers"
 import { executeRoutineAction } from "../characters/execute-routine-actions"
 import { ModelGateway } from "../models/gateway"
@@ -20,16 +22,24 @@ import { parseChannelResponse } from "./response/parse-xml"
 import { executeNoteAction, loadRecentNotes } from "../notebook/execute-actions"
 import { makeChannelLock } from "../channels/lock"
 import { generateChannelResponse } from "./tool-loop"
+import { loadImageAttachments } from "./context/attachments"
+import type { MessageAction, StickerDelivery } from "../channels/message-action"
+import type { NoteAction } from "../notebook/note"
+import type { RoutineAction } from "../characters/routine"
 
 // 定时与短期唤醒只针对已绑定角色的频道；绑定缺失说明频道数据已被移除。
 const bound = (channels: ChannelStore["Service"], key: ChannelKey) =>
-  channels
-    .find(key)
-    .pipe(
-      Effect.flatMap((channel) =>
-        channel === undefined ? Effect.fail(new ChannelNotFound({ channelId: channelIdOf(key) })) : Effect.succeed(channel),
-      ),
-    )
+  channels.find(key).pipe(
+    Effect.flatMap((channel) =>
+      channel === undefined ? Effect.fail(new ChannelNotFound({ channelId: channelIdOf(key) })) : Effect.succeed(channel),
+    ),
+  )
+
+type Execution =
+  | { readonly type: "message"; readonly action: MessageAction }
+  | { readonly type: "sticker"; readonly delivery: StickerDelivery }
+  | { readonly type: "note-add"; readonly action: NoteAction }
+  | { readonly type: "routine"; readonly action: RoutineAction }
 
 export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutines["Service"] | undefined) =>
   Layer.effect(
@@ -37,6 +47,8 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
     Effect.gen(function* () {
       const channels = yield* ChannelStore
       const characters = yield* CharacterCatalog
+      const stickers = yield* CharacterStickers
+      const media = yield* ChannelMediaStore
       const triggers = yield* ChannelTriggers
       const notebook = yield* NotebookStore
       const platform = yield* ChannelPlatform
@@ -61,13 +73,27 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
         yield* Effect.logDebug(
           `已读取历史 ${history.messages.length} 条，参与者 ${history.participants.length} 人`,
         )
+        // 主模型不支持图片时不读取媒体，所有图片在上下文中标记为 attached="false"。
+        const attachments = model.capabilities.imageInput
+          ? yield* loadImageAttachments(media, history, trigger)
+          : []
         const notes = yield* loadRecentNotes(channel.id).pipe(Effect.provideService(NotebookStore, notebook))
         yield* Effect.logDebug(`已加载近期笔记 ${notes.length} 条`)
         const routine = routines === undefined ? undefined : yield* routines.get(channel.presetId)
         const now = yield* DateTime.nowAsDate
         const context = yield* Effect.try({
           try: () =>
-            buildChannelContext({ channel, preset, history, notes, trigger, timezone, routine, now: now.getTime() }),
+            buildChannelContext({
+              channel,
+              preset,
+              history,
+              notes,
+              trigger,
+              timezone,
+              routine,
+              now: now.getTime(),
+              attachments,
+            }),
           catch: (error) => new InvalidReply({ reason: error instanceof Error ? error.message : "角色上下文组装失败" }),
         })
         yield* Effect.logDebug(
@@ -102,32 +128,77 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
           ...history.messages.map((message) => message.id),
           ...(trigger.type === "message" ? [trigger.message.id] : []),
         ])
+        const participantIds = new Set(history.participants.map((participant) => participant.id))
         const noteIds = new Set(output.noteIds)
+        const executions: Execution[] = []
+        // 先完整校验，再执行任何动作；失败不会发出半截消息。
         for (const action of response.actions) {
-          if (action.type === "message" && action.quote !== undefined && !messageIds.has(action.quote)) {
-            return yield* Effect.fail(new InvalidReply({ reason: "消息引用不在当前上下文中" }))
+          if (action.type === "next-reply") continue
+          if (action.type === "message") {
+            for (const part of action.parts) {
+              if (part.type !== "at") continue
+              if (history.direct) return yield* Effect.fail(new InvalidReply({ reason: "私聊不能使用 @ 提及" }))
+              if (part.user === history.bot.id || !participantIds.has(part.user)) {
+                return yield* Effect.fail(new InvalidReply({ reason: "消息提及不在当前上下文中" }))
+              }
+            }
+            if (action.quote !== undefined && !messageIds.has(action.quote)) {
+              return yield* Effect.fail(new InvalidReply({ reason: "消息引用不在当前上下文中" }))
+            }
+            executions.push({ type: "message", action })
+            continue
+          }
+          if (action.type === "sticker") {
+            const summary = preset.character.stickers?.[action.stickerId]
+            if (summary === undefined) {
+              return yield* Effect.fail(new InvalidReply({ reason: `角色没有名为 ${action.stickerId} 的表情包` }))
+            }
+            if (action.quote !== undefined && !messageIds.has(action.quote)) {
+              return yield* Effect.fail(new InvalidReply({ reason: "消息引用不在当前上下文中" }))
+            }
+            const asset = yield* stickers.load(channel.presetId, action.stickerId)
+            executions.push({
+              type: "sticker",
+              delivery: {
+                type: "sticker",
+                stickerId: action.stickerId,
+                summary,
+                sha256: asset.sha256,
+                mimeType: asset.mimeType,
+                byteLength: asset.bytes.byteLength,
+                bytes: asset.bytes,
+                ...(action.quote === undefined ? {} : { quote: action.quote }),
+              },
+            })
+            continue
           }
           if (action.type === "note-add" && action.links?.some((link) => !noteIds.has(link.noteId))) {
             return yield* Effect.fail(new InvalidReply({ reason: "笔记引用不在当前上下文中" }))
           }
+          executions.push(
+            action.type === "note-add"
+              ? { type: "note-add", action }
+              : { type: "routine", action },
+          )
         }
         let completedActions = 0
-        for (const action of response.actions) {
-          if (action.type === "next-reply") continue
-          yield* Effect.logDebug(`执行动作 #${completedActions + 1} ${action.type}`)
+        for (const execution of executions) {
+          yield* Effect.logDebug(`执行动作 #${completedActions + 1} ${execution.type}`)
           const actionEffect: Effect.Effect<void, ChannelExecutionError["cause"]> =
-            action.type === "message"
-              ? platform.send(channel, action)
-              : action.type === "note-add"
-                ? executeNoteAction(channel.id, action).pipe(
-                    Effect.provideService(NotebookStore, notebook),
-                    Effect.asVoid,
-                  )
-                : routines === undefined
-                  ? Effect.fail(new CharacterRoutineError({ reason: "日程功能未开启，无法执行 routine 动作" }))
-                  : executeRoutineAction(channel.presetId, action).pipe(
-                      Effect.provideService(CharacterRoutines, routines),
+            execution.type === "message"
+              ? platform.send(channel, execution.action)
+              : execution.type === "sticker"
+                ? platform.send(channel, execution.delivery)
+                : execution.type === "note-add"
+                  ? executeNoteAction(channel.id, execution.action).pipe(
+                      Effect.provideService(NotebookStore, notebook),
+                      Effect.asVoid,
                     )
+                  : routines === undefined
+                    ? Effect.fail(new CharacterRoutineError({ reason: "日程功能未开启，无法执行 routine 动作" }))
+                    : executeRoutineAction(channel.presetId, execution.action).pipe(
+                        Effect.provideService(CharacterRoutines, routines),
+                      )
           yield* actionEffect.pipe(
             Effect.mapError((cause) => new ChannelExecutionError({ stage: "actions", completedActions, cause })),
           )

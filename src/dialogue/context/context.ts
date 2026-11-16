@@ -5,6 +5,7 @@ import type { ChannelTrigger } from "../trigger"
 import type { ModelInput } from "../../models/model"
 import type { Note } from "../../notebook/note"
 import type { ChannelHistory } from "../../channels/messaging"
+import type { ImageAttachment } from "./attachments"
 
 export interface ChannelContextInput {
   readonly channel: Channel
@@ -15,5 +16,7 @@ export interface ChannelContextInput {
   readonly timezone: string
   readonly now: number
   readonly routine: CharacterRoutine | undefined
+  // 本轮实际随请求附带的图片；未附带的图片在消息中标记 attached="false"。
+  readonly attachments: ReadonlyArray<ImageAttachment>
 }
 export type ChannelContextBuilder = (input: ChannelContextInput) => ModelInput

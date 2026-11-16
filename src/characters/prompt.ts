@@ -18,3 +18,16 @@ export const characterContext = (preset: CharacterPreset): string => {
     ...character.guidance.map((item) => `- ${item}`),
   ].join("\n")
 }
+
+// 只向模型提供 ID 与简介短语；文件路径与格式由程序维护。
+export const stickerContext = (preset: CharacterPreset): string => {
+  const stickers = preset.character.stickers ?? {}
+  return [
+    "## 可用表情包",
+    "用 <sticker id=\"表情包ID\" /> 发送其中一张；ID 只能来自下列列表，一次动作一张。",
+    ...Object.entries(stickers).map(([id, summary]) => `- ${id}：${summary}`),
+  ].join("\n")
+}
+
+export const hasStickers = (preset: CharacterPreset): boolean =>
+  Object.keys(preset.character.stickers ?? {}).length > 0

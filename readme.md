@@ -108,6 +108,9 @@ Gemini 配置面向新模型，不再提供或发送 `temperature`、`topP`、`t
 Koishi 项目/
   data/yokai/
     characters/companion.yml   # 原格式的角色预设
+    characters/companion/
+      stickers/sleepy.webp     # 角色表情包，按 ID 命名，后缀由程序发现
+    media/<sha256>             # 入站图片内容寻址存储
     logs/<调用 ID>/
       input.json              # 模型输入与上下文
       result.json             # 输出或脱敏错误
@@ -129,9 +132,47 @@ Koishi 项目/
 - 业务日志使用 Effect 日志入口，由当前插件的 Koishi logger 输出。
 - 消息监听、定时器和依赖关系由 Koishi 管理，Effect scope 管理进行中的业务任务与请求。
 
-频道历史仅保存插件接收的参与者消息和确认发送的角色消息，与 Koishi 频道相同按平台和频道 ID 隔离；上下文读取最近 50 条并排除触发消息。历史存在 Koishi 数据库中，不回填插件启用前的远端历史。图片、语音等仅提供内容类型标记，暂不分析附件内容。
+频道历史仅保存插件接收的参与者消息和确认发送的角色消息，与 Koishi 频道相同按平台和频道 ID 隔离；上下文读取最近 50 条并排除触发消息。历史存在 Koishi 数据库中，不回填插件启用前的远端历史。语音等非图片附件仍只提供类型标记，不分析内容；图片与表情包的输入输出见下节。
 
 错误、执行进度、模型调用记录和工具结果不会作为消息发送，也不会混入参与者历史。模型输出使用纯文本及显式引用发送，不能注入 Koishi 消息元素。
+
+## 多模态输入与输出
+
+### 入站图片与表情包
+
+- 参与者消息中的图片/表情包按真实内容格式识别（PNG、JPEG、WebP、GIF，单张上限 10 MiB），按 SHA-256 内容寻址保存到 `data/yokai/media/`，相同图片全局只存一份；数据库中只保留元数据。
+- 获取失败、超出上限或格式不受支持时，消息仍然入库，图片片段标记为不可用，只写入后台调试日志；不向聊天或历史插入错误文本。
+- `@` 提及保留目标参与者 ID 与昵称，不再压平为纯文本；历史表新增结构化 `parts` 列，旧记录按原 `text` 列回退读取。
+
+### 随请求附带的图片
+
+- 只有当前模型声明支持图片输入时才附带画面；`/models` 返回 `input_modalities` 时以其是否包含 `image` 为准，未声明时按供应商默认能力处理。DeepSeek 的 `deepseek-flash` 支持图片，`deepseek-v4-pro` 不支持，切换后自动改为只看文字。
+- 窗口是确定性的：本次触发消息、其引用消息，再由新到旧补齐最近历史；最多 4 张、合计不超过 12 MiB，相同内容只附带一次。
+- 消息中的 `<image ... attached="true" ref="img_1" />` 表示画面已随请求附带；`attached="false"` 表示历史图片未附带，模型不会编造内容。
+- 图片以 data URL 或供应商原生内联块发送（DeepSeek/OpenAI 使用 base64 data URL，Gemini 使用 `inlineData`）；模型调用记录的 `input.json` 只保留 `sha256` 和大小，不写入图片正文。
+
+### 出站提及与表情包
+
+角色可以在 `<message>` 中内联 `<at user="实际参与者ID" />` 点名群友；私聊或引用当前上下文之外的参与者会被拒绝，整轮动作在发送前统一校验。角色表情包使用独立动作：
+
+```xml
+<sticker id="sleepy" />
+<sticker id="无语" quote="实际消息ID" />
+```
+
+### 角色表情包文件
+
+角色预设只声明 ID 与简介短语，路径与扩展名由程序维护：
+
+```yaml
+character:
+  # ...
+  stickers:
+    sleepy: 趴在被窝里困得睁不开眼
+    无语: 死鱼眼无语凝噎
+```
+
+对应文件放在 `data/yokai/characters/<角色目录>/stickers/`，文件名主干与 ID 相同，扩展名可为 `.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`；更换格式无需修改预设。目录缺失、同名多格式、文件超过 10 MiB 或内容格式无效会在启动时报错。未在预设中声明的图片不会进入提示词，也不能被发送。
 
 ## 可逆生命周期
 
@@ -149,8 +190,9 @@ Koishi 项目/
 src/
   index.ts           # Koishi 插件入口
   config/            # 配置契约、Schema、校验与解析
-  characters/        # 角色、预设、角色状态、文件加载与日常生成
-  channels/          # Koishi 频道上的角色绑定、参与者消息、历史与发送
+  media/             # 图片格式识别与字节上限
+  characters/        # 角色、预设、表情包、角色状态、文件加载与日常生成
+  channels/          # Koishi 频道上的角色绑定、参与者消息、历史、媒体与发送
   dialogue/          # 对话编排、上下文、响应协议、模型工具与短期唤醒
     context/
     response/

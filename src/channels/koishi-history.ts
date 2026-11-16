@@ -1,8 +1,9 @@
 import { Effect, Layer, Schema, type Semaphore } from "effect"
 import { h, Universal, type Context, type Session } from "koishi"
-import { Message, Participant } from "./message"
+import { Message, Participant, messageText, type MessagePart } from "./message"
 import { type ChannelKey } from "./channel"
-import { type MessageAction } from "./message-action"
+import { type ChannelOutboundAction } from "./message-action"
+import type { ChannelMediaStore } from "./media"
 import { ChannelPlatform, ChannelPlatformError } from "./messaging"
 import { KoishiHistoryError, type KoishiHistory } from "./history"
 import type { HistoryRow } from "./history-table"
@@ -14,30 +15,76 @@ export const keyOf = (session: Session): ChannelKey | undefined =>
 // 业务调用方也会传入 Channel，其 id/state 不是历史表字段。
 const keyFields = ({ platform, channelId }: ChannelKey) => ({ platform, channelId })
 
-export const encodeAction = (action: MessageAction): h.Fragment => [
+export const encodeAction = (action: ChannelOutboundAction): h.Fragment => [
   ...(action.quote ? [h.quote(action.quote)] : []),
-  h.text(action.text),
+  ...(action.type === "sticker"
+    ? [h.image(action.bytes, action.mimeType)]
+    : action.parts.map((part) => (part.type === "text" ? h.text(part.text) : h.at(part.user)))),
 ]
 
-const contentText = (elements: readonly h[]): string =>
-  elements
-    .map((element) => {
-      if (element.type === "quote") return ""
-      if (element.type === "at") return `@${String(element.attrs.name ?? element.attrs.id ?? "全体成员")}`
-      if (element.type === "img" || element.type === "image") return "[图片]"
-      if (element.type === "audio") return "[语音]"
-      if (element.type === "video") return "[视频]"
-      if (element.type === "file") return "[文件]"
-      return element.type === "text" ? element.toString(true) : contentText(element.children)
-    })
-    .join("")
+// 把 Koishi 消息元素解析为有序片段；图片立即落盘并只保留元数据。
+const contentParts = (media: ChannelMediaStore["Service"], session: Session) =>
+  Effect.gen(function* () {
+    const parts: MessagePart[] = []
+    // 单条消息最多处理固定数量的图片；先占位，再并发落盘，保持原有顺序。
+    const pending: Array<{ readonly index: number; readonly source: string }> = []
+    let images = 0
+    const walk = (elements: readonly h[]): Effect.Effect<void> =>
+      Effect.forEach(
+        elements,
+        (element) =>
+          Effect.gen(function* () {
+            if (element.type === "quote") return
+            if (element.type === "text") {
+              const value = element.toString(true)
+              if (value !== "") parts.push({ type: "text", text: value })
+              return
+            }
+            if (element.type === "at") {
+              const target = element.attrs.id
+              if (typeof target !== "string" || target === "") return
+              const name = element.attrs.name
+              parts.push({
+                type: "at",
+                target,
+                ...(typeof name === "string" && name !== "" ? { name } : {}),
+              })
+              return
+            }
+            if (element.type === "img" || element.type === "image") {
+              const source = element.attrs.src ?? element.attrs.url
+              const index = parts.length
+              parts.push({ type: "image", kind: "image", unavailable: true })
+              if (typeof source === "string" && source !== "" && images < 9) pending.push({ index, source })
+              images++
+              return
+            }
+            if (element.children.length > 0) yield* walk(element.children)
+          }),
+        { discard: true },
+      )
+    const elements = session.elements ?? h.parse(session.content ?? session.event.message?.content ?? "")
+    yield* walk(elements)
+    const stored = yield* Effect.forEach(
+      pending,
+      (item) => media.ingest(item.source).pipe(Effect.map((value) => ({ index: item.index, value }))),
+      { concurrency: 3 },
+    )
+    for (const { index, value } of stored) {
+      if (value !== undefined) parts[index] = { type: "image", kind: "image", ...value }
+    }
+    return parts
+  })
+
+const isBlank = (parts: ReadonlyArray<MessagePart>) =>
+  parts.length === 0 || parts.every((part) => part.type === "text" && part.text.trim() === "")
 
 const messageFromRow = (row: HistoryRow) =>
   Schema.decodeUnknownEffect(Message)({
     id: row.messageId,
     sender: row.senderId,
     time: row.time.getTime(),
-    text: row.text,
+    parts: row.parts ?? [{ type: "text", text: row.text }],
     ...(row.quote ? { quote: row.quote } : {}),
   })
 
@@ -63,6 +110,7 @@ const describePlatformError = (error: unknown): string => {
 export const createKoishiHistory = (
   ctx: Context,
   serialize: Semaphore.Semaphore["withPermit"],
+  media: ChannelMediaStore["Service"],
 ): Effect.Effect<KoishiHistory> =>
   Effect.sync(() => {
     const record = Effect.fn("KoishiHistory.record")(
@@ -82,7 +130,8 @@ export const createKoishiHistory = (
               senderId: participant.id,
               senderName: participant.name,
               time: new Date(message.time),
-              text: message.text,
+              text: messageText(message),
+              parts: message.parts,
               quote: message.quote ?? null,
             })
           },
@@ -92,9 +141,9 @@ export const createKoishiHistory = (
 
     const recordIncoming: KoishiHistory["recordIncoming"] = Effect.fn("KoishiHistory.recordIncoming")(
       function* (session) {
-        const text = contentText(session.elements ?? h.parse(session.content ?? session.event.message?.content ?? ""))
-        if (!text.trim()) {
-          yield* Effect.logDebug("消息无可识别文本，不写入历史")
+        const parts = yield* contentParts(media, session)
+        if (isBlank(parts)) {
+          yield* Effect.logDebug("消息无可识别内容，不写入历史")
           return
         }
         const key = keyOf(session)
@@ -103,7 +152,7 @@ export const createKoishiHistory = (
           id: session.messageId,
           sender: session.userId,
           time: session.timestamp,
-          text,
+          parts,
           ...(session.quote?.id ? { quote: session.quote.id } : {}),
         }).pipe(Effect.mapError(() => new KoishiHistoryError({ operation: "record" })))
         const participant = yield* Schema.decodeUnknownEffect(Participant)({
@@ -121,7 +170,7 @@ export const createKoishiHistory = (
         }
         yield* record(session, incoming, participant, "incoming")
         yield* Effect.logDebug(
-          `已记录入站消息 ${incoming.id}，发送者 ${participant.name}(${participant.id})${incoming.quote ? `，引用 ${incoming.quote}` : ""}：${text}`,
+          `已记录入站消息 ${incoming.id}，发送者 ${participant.name}(${participant.id})${incoming.quote ? `，引用 ${incoming.quote}` : ""}：${messageText(incoming)}`,
         )
         return { key, incoming }
       },
@@ -217,12 +266,15 @@ export const createKoishiHistory = (
                 ).values(),
               ],
               messages,
+              direct: session.isDirect,
             }
           }),
           // Native sends cannot be aborted. Finish delivery and its history record
           // before honoring cancellation; the caller's next action remains interruptible.
           send: Effect.fn("KoishiHistory.send")(function* (_key, action) {
-            yield* Effect.logDebug(`发送消息${action.quote ? `（引用 ${action.quote}）` : ""}：${action.text}`)
+            yield* Effect.logDebug(
+              `发送${action.type === "sticker" ? `表情包 ${action.stickerId}` : "消息"}${action.quote ? `（引用 ${action.quote}）` : ""}`,
+            )
             const ids = yield* Effect.tryPromise({
               try: () =>
                 session.bot.sendMessage(session.channelId!, encodeAction(action), session.event.referrer, { session }),
@@ -230,13 +282,33 @@ export const createKoishiHistory = (
             }).pipe(
               Effect.tapError((error) => Effect.logWarning(`平台发送失败：${error.detail ?? "未知错误"}`)),
             )
-            const message = yield* Schema.decodeUnknownEffect(Message)({
-              id: ids[0],
-              sender: session.selfId,
-              time: Date.now(),
-              text: action.text,
-              ...(action.quote ? { quote: action.quote } : {}),
-            }).pipe(Effect.mapError(() => new ChannelPlatformError({ operation: "send" })))
+            const message = yield* Schema.decodeUnknownEffect(Message)(
+              action.type === "sticker"
+                ? {
+                    id: ids[0],
+                    sender: session.selfId,
+                    time: Date.now(),
+                    parts: [
+                      {
+                        type: "image",
+                        kind: "sticker",
+                        sha256: action.sha256,
+                        mimeType: action.mimeType,
+                        byteLength: action.byteLength,
+                        summary: action.summary,
+                        stickerId: action.stickerId,
+                      },
+                    ],
+                    ...(action.quote ? { quote: action.quote } : {}),
+                  }
+                : {
+                    id: ids[0],
+                    sender: session.selfId,
+                    time: Date.now(),
+                    parts: action.parts,
+                    ...(action.quote ? { quote: action.quote } : {}),
+                  },
+            ).pipe(Effect.mapError(() => new ChannelPlatformError({ operation: "send" })))
             const participant = yield* Schema.decodeUnknownEffect(Participant)({
               id: session.selfId,
               name: session.bot.user?.name || session.selfId,

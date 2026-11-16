@@ -1,13 +1,15 @@
 import { Context, Data, type Effect } from "effect"
 import type { ChannelKey } from "./channel"
 import type { Message, MessageId, Participant } from "./message"
-import type { MessageAction } from "./message-action"
+import type { ChannelOutboundAction } from "./message-action"
 
 export interface ChannelHistory {
   readonly bot: Participant
   readonly participants: ReadonlyArray<Participant>
   // 消息触发：排除触发消息。定时触发：取触发时间之前的历史，不伪造消息。
   readonly messages: ReadonlyArray<Message>
+  // 私聊不提供 @ 提及。
+  readonly direct: boolean
 }
 export type ChannelHistoryQuery =
   | { readonly beforeMessageId: MessageId; readonly limit: number }
@@ -27,6 +29,6 @@ export class ChannelPlatform extends Context.Service<
       query: ChannelHistoryQuery,
     ) => Effect.Effect<ChannelHistory, ChannelPlatformError>
     // 成功返回表示平台确认发送；失败或中断仍可能已发送，不承诺 exactly-once。
-    readonly send: (key: ChannelKey, action: MessageAction) => Effect.Effect<void, ChannelPlatformError>
+    readonly send: (key: ChannelKey, action: ChannelOutboundAction) => Effect.Effect<void, ChannelPlatformError>
   }
 >()("yokai/channels/ChannelPlatform") {}

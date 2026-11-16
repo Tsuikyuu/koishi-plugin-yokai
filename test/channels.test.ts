@@ -59,10 +59,15 @@ const fixture = async () => {
   await app.start()
   // Koishi 中间件在接收消息时建档并指定受理人；这里直接准备频道记录。
   const assign = (channelId: string) => app.database.createChannel("test-platform", channelId, { assignee: "bot" })
+  // 文本历史不需要媒体目录；图片用例单独覆盖媒体存储。
+  const media = {
+    ingest: () => Effect.succeed(undefined),
+    read: () => Effect.succeed(undefined),
+  }
   const history = await Effect.runPromise(
     Effect.gen(function* () {
       const lock = yield* Semaphore.make(1)
-      return yield* createKoishiHistory(scope, lock.withPermit)
+      return yield* createKoishiHistory(scope, lock.withPermit, media)
     }),
   )
   const incoming = (id: string, direct = false, userId = "human", channelId = "room"): Session =>
@@ -94,7 +99,7 @@ const fixture = async () => {
   }
 }
 
-const action = Schema.decodeSync(MessageAction)({ type: "message", text: "Hello" })
+const action = Schema.decodeSync(MessageAction)({ type: "message", parts: [{ type: "text", text: "Hello" }] })
 const channelFor = (key: ChannelKey): Channel => ({
   ...key,
   id: channelIdOf(key),
@@ -301,7 +306,12 @@ test("cancellation waits for a submitted native send to settle and prevents the 
 test("model text stays plain text while an explicit quote remains a native quote", () => {
   const quoted = Schema.decodeSync(MessageAction)({
     type: "message",
-    text: '<at id="all"/> & <image src="https://example.invalid/secret"/>',
+    parts: [
+      {
+        type: "text",
+        text: '<at id="all"/> & <image src="https://example.invalid/secret"/>',
+      },
+    ],
     quote: 'quoted"id',
   })
   const elements = h.parse(h.normalize(encodeAction(quoted)).join(""))
@@ -310,5 +320,5 @@ test("model text stays plain text while an explicit quote remains a native quote
     ["quote", "text"],
   )
   assert.equal(elements[0]?.attrs.id, quoted.quote)
-  assert.equal(elements[1]?.toString(true), quoted.text)
+  assert.equal(elements[1]?.toString(true), (quoted.parts[0] as { text: string }).text)
 })
