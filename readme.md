@@ -143,6 +143,7 @@ Koishi 项目/
 - 参与者消息中的图片/表情包按真实内容格式识别（PNG、JPEG、WebP、GIF，单张上限 10 MiB），按 SHA-256 内容寻址保存到 `data/yokai/media/`，相同图片全局只存一份；数据库中只保留元数据。
 - 获取失败、超出上限或格式不受支持时，消息仍然入库，图片片段标记为不可用，只写入后台调试日志；不向聊天或历史插入错误文本。
 - `@` 提及保留目标参与者 ID 与昵称，不再压平为纯文本；历史表新增结构化 `parts` 列，旧记录按原 `text` 列回退读取。
+- Telegram 适配器的 `files.local` 只用于自建 TDLib Bot API 服务；使用官方 Bot API 时必须保持关闭。开启后适配器会把服务器返回的 `photos/file_*.jpg` 当作本机路径读取并失败，消息中的图片会变成没有 `src` 的空元素。另需注意 `@satorijs/adapter-telegram@4.5.11` 在官方 API 模式下会把相对路径直接交给 `ctx.http.file`，触发 `Invalid URL`（上游 [satorijs/satori#346](https://github.com/satorijs/satori/issues/346)）；需要为 `$getFile` 传入由 `file.config.endpoint` 拼出的绝对地址，或改用自建本地 Bot API 服务。
 
 ### 随请求附带的图片
 
