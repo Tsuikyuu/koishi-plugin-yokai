@@ -142,6 +142,51 @@ test("DeepSeek forwards reasoning settings from Koishi config and leaves omitted
   }
 })
 
+test("DeepSeek maps output limits and stop sequences while rejecting token-truncated replies", async (t) => {
+  const bodies: unknown[] = []
+  let finishReason = "stop"
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      bodies.push(body)
+      json(response, { choices: [{ finish_reason: finishReason, message: { role: "assistant", content: "hello" } }] })
+    })
+  })
+  for (const { settings, wire } of [
+    { settings: {}, wire: {} },
+    { settings: { stopSequences: [] }, wire: {} },
+    {
+      settings: { maxOutputTokens: 4096, stopSequences: ["\nEND\n", "结束"] },
+      wire: { max_tokens: 4096, stop: ["\nEND\n", "结束"] },
+    },
+  ]) {
+    const raw = Config({
+      models: {
+        default: "deepseek/deepseek-v4-pro",
+        deepseek: { baseUrl, apiKey: "private-api-key", ...settings },
+      },
+    })
+    const resolved = await Effect.runPromise(resolveModel(raw.models))
+    assert.equal(resolved.provider, "deepseek")
+    assert.deepEqual(await Effect.runPromise(generate(ModelGatewayDeepSeek(resolved), app.http)), { text: "hello" })
+    assert.deepEqual(bodies.at(-1), {
+      model: "deepseek-v4-pro",
+      stream: false,
+      messages: input.messages,
+      ...wire,
+    })
+  }
+  finishReason = "length"
+  assert.equal(await errorKind(generate(ModelGatewayDeepSeek({
+    baseUrl, apiKey: key, model: "deepseek-v4-pro", timeoutMs: 1000, maxOutputTokens: 1,
+  }), app.http)), "IncompleteResponse")
+  assert.deepEqual(bodies.at(-1), {
+    model: "deepseek-v4-pro",
+    stream: false,
+    max_tokens: 1,
+    messages: input.messages,
+  })
+})
+
 test("DeepSeek preserves reasoning across tool rounds without exposing it in replies or call records", async (t) => {
   const bodies: unknown[] = []
   const traces: unknown[] = []

@@ -31,6 +31,10 @@ export const Config: Schema<any, Config> = Schema.intersect([
         ...provider,
         reasoningEffort: Schema.union(DeepSeekReasoningEfforts)
           .description("可选推理强度；none 关闭思考，low/high/max 开启思考；留空使用供应商默认值（当前为 high）"),
+        maxOutputTokens: Schema.natural().min(1).max(393216)
+          .description("可选生成 token 上限（1–393216），包含思考与回答；留空使用供应商默认值"),
+        stopSequences: Schema.array(Schema.string().min(1)).max(16)
+          .description("可选停止序列，最多 16 个非空字符串；匹配的序列不包含在输出中；留空或空列表不发送"),
         temperature: Schema.number().min(0).max(2)
           .description("可选 Temperature（0–2）；仅非思考模式生效，思考模式忽略；留空使用供应商默认值"),
         // Schemastery 的 min 是闭区间，以最小正数表达大于 0。

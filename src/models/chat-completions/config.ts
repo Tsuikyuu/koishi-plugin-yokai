@@ -8,4 +8,6 @@ export interface ChatCompletionsConfig {
   readonly baseUrl?: string
   readonly temperature?: number
   readonly topP?: number
+  readonly maxOutputTokens?: number
+  readonly stopSequences?: readonly string[]
 }

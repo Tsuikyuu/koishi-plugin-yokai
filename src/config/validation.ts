@@ -44,6 +44,8 @@ const providerFields = {
 export const DeepSeekProviderConfig = Schema.Struct({
   ...providerFields,
   reasoningEffort: Schema.optionalKey(Schema.Literals(DeepSeekReasoningEfforts)),
+  maxOutputTokens: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 393216 }))),
+  stopSequences: Schema.optionalKey(Schema.Array(NonEmpty).check(Schema.isMaxLength(16))),
   temperature: Schema.optionalKey(SamplingTemperature),
   topP: Schema.optionalKey(SamplingTopP),
 })

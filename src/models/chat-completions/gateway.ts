@@ -27,6 +27,8 @@ export const ModelGatewayChatCompletions = (
                 ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
                 ...(config.topP === undefined ? {} : { top_p: config.topP }),
                 ...(config.reasoningEffort === undefined ? {} : { reasoning_effort: config.reasoningEffort }),
+                ...(config.maxOutputTokens === undefined ? {} : { max_tokens: config.maxOutputTokens }),
+                ...(config.stopSequences?.length ? { stop: config.stopSequences } : {}),
                 messages,
                 ...(input.tools === undefined
                   ? {}

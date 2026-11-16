@@ -102,6 +102,33 @@ test("DeepSeek validates sampling bounds and keeps its reasoning settings indepe
   }
 })
 
+test("DeepSeek validates output-token and stop-sequence limits through both configuration boundaries", async () => {
+  for (const settings of [
+    { maxOutputTokens: 1, stopSequences: [] },
+    { maxOutputTokens: 393216, stopSequences: Array.from({ length: 16 }, (_, index) => `stop-${index}`) },
+  ]) {
+    const raw = Config({
+      models: { default: "deepseek/deepseek-v4-pro", deepseek: { apiKey: "fixture-secret", ...settings } },
+    })
+    const resolved = await Effect.runPromise(resolveModel(raw.models))
+    assert.equal(resolved.provider, "deepseek")
+    assert.equal(resolved.maxOutputTokens, settings.maxOutputTokens)
+    assert.deepEqual(resolved.stopSequences, settings.stopSequences)
+  }
+  for (const settings of [
+    { maxOutputTokens: 0 },
+    { maxOutputTokens: -1 },
+    { maxOutputTokens: 1.5 },
+    { maxOutputTokens: 393217 },
+    { stopSequences: [""] },
+    { stopSequences: Array.from({ length: 17 }, (_, index) => `stop-${index}`) },
+  ]) {
+    const models = { default: "deepseek/deepseek-v4-pro", deepseek: { apiKey: "fixture-secret", ...settings } }
+    assert.throws(() => Config({ models }))
+    assert.equal((await Effect.runPromiseExit(resolveModel(models)))._tag, "Failure")
+  }
+})
+
 test("Gemini configuration resolves independently through the Koishi schema", async () => {
   const raw = Config({
     ...config,
