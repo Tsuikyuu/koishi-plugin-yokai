@@ -9,6 +9,7 @@ import { ChannelStore, ChannelStoreError } from "../channels/store"
 import { makeChannelLock } from "../channels/lock"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutinesLive } from "../characters/generated-routines"
+import { CharacterRoutines } from "../characters/routines"
 import { ChannelTriggers } from "../dialogue/next-reply/triggers"
 import { ChannelTriggersLive } from "../dialogue/next-reply/track-triggers"
 import { ModelGatewayRecorded } from "../models/records/recorded-gateway"
@@ -66,9 +67,14 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           characters.get,
         )
       }).pipe(Effect.provide(catalog()))
-      const routines = yield* Layer.build(
-        CharacterRoutinesLive(presets, config.timezone).pipe(Layer.provide(yield* modelLayer)),
-      ).pipe(Effect.provideContext(base))
+      const routines = config.routineEnabled
+        ? Services.get(
+            yield* Layer.build(
+              CharacterRoutinesLive(presets, config.timezone).pipe(Layer.provide(yield* modelLayer)),
+            ).pipe(Effect.provideContext(base)),
+            CharacterRoutines,
+          )
+        : undefined
       const triggers = yield* Layer.build(ChannelTriggersLive)
       const history = yield* createKoishiHistory(ctx, databaseGate.withPermit)
       const withChannel = yield* makeChannelLock
@@ -80,12 +86,11 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       ) =>
         Effect.gen(function* () {
           const model = yield* modelLayer
-          const roleplay = ChannelRoleplayLive(config.timezone).pipe(
+          const roleplay = ChannelRoleplayLive(config.timezone, routines).pipe(
             Layer.provide(Layer.mergeAll(model, catalog(), history.channelPlatform(session))),
           )
           return yield* Effect.flatMap(ChannelRoleplay, run).pipe(
             Effect.provide(roleplay),
-            Effect.provideContext(routines),
             Effect.provideContext(triggers),
             Effect.provideContext(base),
           )

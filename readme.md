@@ -16,11 +16,11 @@ yarn start
 
 开发模式使用模板原有的 `yarn dev`。插件配置已加入 `koishi.yml` 的 `~yokai`，暂未启用。先在控制台设置 Koishi 过滤器，选择要参与的账号和频道，再启用插件。
 
-启用时会为默认角色和已有频道绑定的角色调用模型生成日常时间表；参与者消息和到期唤醒也会调用模型。启动校验或模型生成失败只进入后台日志。
+默认在启用时为默认角色和已有频道绑定的角色调用模型生成日常时间表，可通过 `roleplay.routineEnabled` 关闭；参与者消息和到期唤醒也会调用模型。启动校验或模型生成失败只进入后台日志。
 
 ## 配置与文件
 
-Config Schema 只管理原运行配置中的模型选择、供应商参数、时区、角色文件映射和默认角色；角色预设正文不放入配置。
+Config Schema 管理模型选择、供应商参数、时区、角色文件映射、默认角色和日程开关；角色预设正文不放入配置。
 
 ```yaml
 version: 1
@@ -41,6 +41,7 @@ characters:
     companion: companion.yml
 roleplay:
   character: companion
+  routineEnabled: true
 ```
 
 这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `reasoningEffort`、`maxOutputTokens`、`stopSequences`、`temperature` 和 `topP`；OpenAI 提供 `reasoningEffort`、`maxOutputTokens`、`verbosity`、`reasoningMode` 和 `reasoningContext`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
@@ -99,7 +100,9 @@ Gemini 配置面向新模型，不再提供或发送 `temperature`、`topP`、`t
 
 `safetySettings.category` 可选 `HARM_CATEGORY_HARASSMENT`、`HARM_CATEGORY_HATE_SPEECH`、`HARM_CATEGORY_SEXUALLY_EXPLICIT`、`HARM_CATEGORY_DANGEROUS_CONTENT`、`HARM_CATEGORY_JAILBREAK`；`threshold` 可选 `OFF`、`BLOCK_NONE`、`BLOCK_ONLY_HIGH`、`BLOCK_MEDIUM_AND_ABOVE`、`BLOCK_LOW_AND_ABOVE`。参数支持情况由所选模型决定，供应商返回的不支持错误按模型调用失败处理。
 
-`models` 使用 Koishi 响应式配置，每轮取得频道锁后读取一次，该轮工具循环固定使用同一快照。其他配置改变由 Koishi 重载插件。每轮重新读取角色预设文件；修改日常生活设定后重载插件以重新生成日程。
+`roleplay.routineEnabled` 默认为 `true`，统一控制日程生成与日程上下文拼装。设为 `false` 后，启动时不生成日常时间表，对话中不附加 `daily_routine`、`current_activity` 和日程调整提示，也不执行 `routine` 动作。`wake-up` 定时任务和 `next-reply` 短期唤醒仍可使用。
+
+`models` 使用 Koishi 响应式配置，每轮取得频道锁后读取一次，该轮工具循环固定使用同一快照。其他配置（包括日程开关）改变由 Koishi 重载插件。每轮重新读取角色预设文件；日程开启时，修改日常生活设定后重载插件以重新生成日程。
 
 ```text
 Koishi 项目/

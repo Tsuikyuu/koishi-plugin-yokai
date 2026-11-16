@@ -33,7 +33,7 @@ export const buildChannelContext: ChannelContextBuilder = ({
       .join("")}</participants>`,
     "# 此前保存的角色状态",
     `<state>${element("emotion", state.emotion)}${element("condition", state.condition)}${element("activity", state.activity)}${element("short_memory", state.short_memory)}</state>`,
-    routineContext(routine, now, timezone),
+    ...(routine === undefined ? [] : [routineContext(routine, now, timezone)]),
     "# 角色记事本（最近创建的部分笔记及关联）",
     `<notebook>${notes
       .map(
@@ -74,13 +74,15 @@ export const buildChannelContext: ChannelContextBuilder = ({
         role: "system",
         content: [
           `你必须扮演「${preset.character.name}」，依据下方角色设定，以该角色的身份、口吻和立场参与当前对话。结合角色状态、记事本和聊天情境决定如何回应或保持沉默，并遵守输出协议。`,
-          "日程是你的生活背景，用于保持当前处境与行为连贯。你知道自己正在做什么，但无需向别人交代完整安排。需要调整作息时，可在 actions 中写 routine 动作修改日常时间表。",
-          "state 是此前保存的状态，short_memory 是过往交流摘要，需要结合当前情境判断是否仍适用。current_activity 提供此刻的生活背景；没有时间依据时，不把旧活动和短期记忆当成刚刚发生的事。",
+          ...(routine === undefined
+            ? []
+            : ["日程是你的生活背景，用于保持当前处境与行为连贯。你知道自己正在做什么，但无需向别人交代完整安排。需要调整作息时，可在 actions 中写 routine 动作修改日常时间表。"]),
+          `state 是此前保存的状态，short_memory 是过往交流摘要，需要结合当前情境判断是否仍适用。${routine === undefined ? "" : "current_activity 提供此刻的生活背景；"}没有时间依据时，不把旧活动和短期记忆当成刚刚发生的事。`,
           "生活经历应符合角色设定，不依据旧记录中与角色设定冲突的内容继续编写经历。",
           "trigger reason 为 wake-up 或 next-reply 时，这是你主动发起的回合；不要伪造用户消息，结合当前情境决定是否发言。",
-          "回应对方此刻表达的意思和情绪，只提及与话题有关的生活细节，不为了说明作息而补充起止时间、前后活动或解释整条时间线。",
+          `回应对方此刻表达的意思和情绪，只提及与话题有关的生活细节${routine === undefined ? "。" : "，不为了说明作息而补充起止时间、前后活动或解释整条时间线。"}`,
           "按角色性格决定说多少，不必每次都把事情解释完整。",
-          channelOutputProtocol,
+          channelOutputProtocol(routine !== undefined),
           characterContext(preset),
         ].join("\n"),
       },

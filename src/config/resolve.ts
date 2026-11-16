@@ -63,6 +63,7 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
     directory,
     presets: new Map(entries),
     characterId: config.roleplay.character,
+    routineEnabled: config.roleplay.routineEnabled ?? true,
     timezone: config.timezone ?? "Asia/Shanghai",
   }
 })

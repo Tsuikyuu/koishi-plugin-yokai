@@ -272,6 +272,70 @@ test(
 )
 
 test(
+  "routine configuration skips generation and context, and takes effect across plugin reloads",
+  { timeout: 20000 },
+  async (t) => {
+    const f = await fixture(t)
+    const baselineHooks = f.hookCount()
+    const disabled: Config = { ...f.config, roleplay: { ...f.config.roleplay, routineEnabled: false } }
+    const fork = f.ctx.plugin(yokai, disabled)
+    assert.ok(fork)
+    await Promise.race([
+      f.firstRoutine.promise.then(() => assert.fail("disabled routines must not generate at startup")),
+      f.ctx.lifecycle.flush(),
+    ])
+    assert.ifError(fork.error)
+    assert.equal(f.calls.length, 0)
+    assert.equal(f.hookCount(), baselineHooks + 1)
+
+    await f.receive("first-disabled")
+    assert.deepEqual(f.sent, ["reply model-a"])
+    const first = f.calls.at(-1)
+    assert.ok(first)
+    const firstContext = first.body.messages.map((message) => message.content).join("\n")
+    assert.doesNotMatch(firstContext, /routine|current_activity|日程/)
+    assert.match(firstContext, /wake-up/)
+    assert.match(firstContext, /next-reply/)
+
+    fork.update({ ...f.config, roleplay: { ...f.config.roleplay, routineEnabled: true } })
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+    assert.equal(f.calls.filter((call) => call.body.tools === undefined).length, 1)
+    assert.equal(f.hookCount(), baselineHooks + 1)
+    await f.receive("enabled")
+    const enabled = f.calls.at(-1)
+    assert.ok(enabled)
+    const enabledContext = enabled.body.messages.map((message) => message.content).join("\n")
+    assert.match(enabledContext, /<daily_routine /)
+    assert.match(enabledContext, /<current_activity>/)
+    assert.match(enabledContext, /<routine start=/)
+
+    fork.update(disabled)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+    assert.equal(f.calls.filter((call) => call.body.tools === undefined).length, 1)
+    assert.equal(f.hookCount(), baselineHooks + 1)
+    await f.receive("disabled-again")
+    const last = f.calls.at(-1)
+    assert.ok(last)
+    assert.doesNotMatch(last.body.messages.map((message) => message.content).join("\n"), /routine|current_activity|日程/)
+    assert.equal(f.sent.length, 3)
+
+    f.handleReplies((call) => complete(
+      call,
+      '<response><think/><actions><routine start="11:30" end="14:00">walking</routine><message>changed</message></actions><status/></response>',
+    ))
+    await f.receive("unsupported-action")
+    assert.equal(f.sent.length, 3)
+    const history = await f.ctx.database.get("yokai_history", {})
+    assert.equal(history.filter((row) => row.direction === "outgoing").length, 3)
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+    assert.equal(f.hookCount(), baselineHooks)
+  },
+)
+
+test(
   "removing and restoring the HTTP dependency cancels work and restores one native listener and timer",
   { timeout: 20000 },
   async (t) => {

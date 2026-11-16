@@ -92,6 +92,9 @@ export const Config: Schema<any, Config> = Schema.intersect([
     }),
     roleplay: Schema.object({
       character: Schema.string().default("companion").description("新频道绑定的默认角色 ID"),
+      routineEnabled: Schema.boolean()
+        .default(true)
+        .description("启用角色日程：启动时生成日常时间表，并在对话中拼装日程上下文和提供日程调整动作"),
     }),
   }).description("角色文件"),
 ])

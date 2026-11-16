@@ -14,6 +14,6 @@ export interface ChannelContextInput {
   readonly trigger: ChannelTrigger
   readonly timezone: string
   readonly now: number
-  readonly routine: CharacterRoutine
+  readonly routine: CharacterRoutine | undefined
 }
 export type ChannelContextBuilder = (input: ChannelContextInput) => ModelInput

@@ -7,6 +7,7 @@ import { ChannelPlatform } from "../channels/messaging"
 import { ChannelNotFound, ChannelStore } from "../channels/store"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutines } from "../characters/routines"
+import { CharacterRoutineError } from "../characters/routine"
 import { ChannelTriggers } from "./next-reply/triggers"
 import { executeRoutineAction } from "../characters/execute-routine-actions"
 import { ModelGateway } from "../models/gateway"
@@ -30,13 +31,12 @@ const bound = (channels: ChannelStore["Service"], key: ChannelKey) =>
       ),
     )
 
-export const ChannelRoleplayLive = (timezone: string) =>
+export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutines["Service"] | undefined) =>
   Layer.effect(
     ChannelRoleplay,
     Effect.gen(function* () {
       const channels = yield* ChannelStore
       const characters = yield* CharacterCatalog
-      const routines = yield* CharacterRoutines
       const triggers = yield* ChannelTriggers
       const notebook = yield* NotebookStore
       const platform = yield* ChannelPlatform
@@ -63,7 +63,7 @@ export const ChannelRoleplayLive = (timezone: string) =>
         )
         const notes = yield* loadRecentNotes(channel.id).pipe(Effect.provideService(NotebookStore, notebook))
         yield* Effect.logDebug(`已加载近期笔记 ${notes.length} 条`)
-        const routine = yield* routines.get(channel.presetId)
+        const routine = routines === undefined ? undefined : yield* routines.get(channel.presetId)
         const now = yield* DateTime.nowAsDate
         const context = yield* Effect.try({
           try: () =>
@@ -116,9 +116,11 @@ export const ChannelRoleplayLive = (timezone: string) =>
                     Effect.provideService(NotebookStore, notebook),
                     Effect.asVoid,
                   )
-                : executeRoutineAction(channel.presetId, action).pipe(
-                    Effect.provideService(CharacterRoutines, routines),
-                  )
+                : routines === undefined
+                  ? Effect.fail(new CharacterRoutineError({ reason: "日程功能未开启，无法执行 routine 动作" }))
+                  : executeRoutineAction(channel.presetId, action).pipe(
+                      Effect.provideService(CharacterRoutines, routines),
+                    )
           yield* actionEffect.pipe(
             Effect.mapError((cause) => new ChannelExecutionError({ stage: "actions", completedActions, cause })),
           )

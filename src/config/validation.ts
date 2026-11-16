@@ -90,6 +90,9 @@ export const AppConfig = Schema.Struct({
     directory: NonEmpty,
     presets: Schema.Record(CharacterId, NonEmpty),
   }),
-  roleplay: Schema.Struct({ character: CharacterId }),
+  roleplay: Schema.Struct({
+    character: CharacterId,
+    routineEnabled: Schema.optionalKey(Schema.Boolean),
+  }),
 })
 export type AppConfig = typeof AppConfig.Type

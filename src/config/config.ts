@@ -13,5 +13,8 @@ export interface Config {
     readonly directory: string
     readonly presets: Record<string, string>
   }
-  readonly roleplay: { readonly character: string }
+  readonly roleplay: {
+    readonly character: string
+    readonly routineEnabled?: boolean
+  }
 }
