@@ -4,6 +4,7 @@ import type { ModelError } from "../model"
 export interface ModelHttpRequest {
   readonly url: string
   readonly apiKey: Redacted.Redacted<string>
+  readonly auth?: "bearer" | "x-goog-api-key"
 }
 
 export interface ModelHttpPostRequest extends ModelHttpRequest {

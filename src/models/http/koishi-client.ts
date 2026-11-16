@@ -11,7 +11,9 @@ const fetchJson = (http: HTTP, method: "GET" | "POST", request: ModelHttpRequest
         redirect: "error",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${Redacted.value(request.apiKey)}`,
+          ...(request.auth === "x-goog-api-key"
+            ? { "x-goog-api-key": Redacted.value(request.apiKey) }
+            : { Authorization: `Bearer ${Redacted.value(request.apiKey)}` }),
         },
         data: request.body,
         // 状态分类和正文解码由本边界完成，避免 HTTP 错误携带供应商正文。

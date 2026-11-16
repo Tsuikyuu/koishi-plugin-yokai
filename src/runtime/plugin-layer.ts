@@ -25,6 +25,7 @@ import { ModelHttpKoishi } from "../models/http/koishi-client"
 import { registerModelSchema } from "./model-schema"
 import { ModelGatewayDeepSeek } from "../models/deepseek/gateway"
 import { ModelGatewayOpenAI } from "../models/openai/gateway"
+import { ModelGatewayGemini } from "../models/gemini/gateway"
 import { ModelTraceStoreFile } from "../models/records/file-store"
 
 const report = (cause: Cause.Cause<unknown>) =>
@@ -48,7 +49,12 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       const modelLayer = Effect.gen(function* () {
         const selected = yield* resolveModel(raw.models)
         yield* Effect.logDebug(`选用模型 ${selected.provider}/${selected.model}`)
-        const gateway = selected.provider === "deepseek" ? ModelGatewayDeepSeek(selected) : ModelGatewayOpenAI(selected)
+        const gateway =
+          selected.provider === "deepseek"
+            ? ModelGatewayDeepSeek(selected)
+            : selected.provider === "gemini"
+              ? ModelGatewayGemini(selected)
+              : ModelGatewayOpenAI(selected)
         return ModelGatewayRecorded(selected.model).pipe(Layer.provide(gateway.pipe(Layer.provide(http))))
       })
       const channels = Services.get(base, ChannelStore)

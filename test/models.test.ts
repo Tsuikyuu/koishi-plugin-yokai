@@ -7,9 +7,14 @@ import { ModelGateway } from "../src/models/gateway"
 import type { ModelInput } from "../src/models/model"
 import { ModelGatewayDeepSeek } from "../src/models/deepseek/gateway"
 import { ModelGatewayOpenAI } from "../src/models/openai/gateway"
+import { ModelGatewayGemini } from "../src/models/gemini/gateway"
 import { ModelHttp } from "../src/models/http/client"
 import { listModels } from "../src/models/catalog"
 import { ModelHttpKoishi } from "../src/models/http/koishi-client"
+import { notebookQueryTool } from "../src/dialogue/tools/notebook-query"
+import { registerModelSchema } from "../src/runtime/model-schema"
+import { Config, ModelSchemaName } from "../src/config/schema"
+import { resolveModel } from "../src/config/resolve"
 
 const fixture = async (
   t: TestContext,
@@ -315,4 +320,238 @@ test("model catalog reports provider authentication failures", async (t) => {
     }).pipe(Effect.provide(ModelHttpKoishi(app.http))),
   )
   assert.equal(kind, "Authentication")
+})
+
+const geminiResponse = (parts: readonly unknown[], finishReason = "STOP") => ({
+  candidates: [{ finishReason, content: { role: "model", parts } }],
+})
+
+test("Gemini uses native generation, system instructions and API-key headers through Koishi HTTP", async (t) => {
+  const bodies: unknown[] = []
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    assert.equal(request.method, "POST")
+    assert.equal(request.url, "/v1beta/models/gemini-test:generateContent")
+    assert.equal(request.headers["x-goog-api-key"], "private-api-key")
+    assert.equal(request.headers.authorization, undefined)
+    assert.equal(request.headers["x-global-header"], "configured")
+    void readBody(request).then((body) => {
+      bodies.push(body)
+      json(response, geminiResponse([
+        { text: "provider-secret", thought: true },
+        { text: "hel", thoughtSignature: "opaque-provider-context" },
+        { text: "lo" },
+      ]))
+    })
+  }, { headers: { "X-Global-Header": "configured" } })
+  const settings = Config({
+    models: {
+      default: "gemini/models/gemini-test",
+      gemini: {
+        baseUrl: `${baseUrl}/v1beta/`,
+        apiKey: Redacted.value(key),
+        timeoutMs: 1000,
+        thinkingLevel: "xhigh",
+        maxOutputTokens: 65536,
+        stopSequences: ["<end>"],
+        seed: 0,
+        presencePenalty: 0,
+        frequencyPenalty: -0.5,
+        safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" }],
+      },
+    },
+  })
+  const selected = await Effect.runPromise(resolveModel(settings.models))
+  assert.equal(selected.provider, "gemini")
+  const result = await Effect.runPromise(generate(
+    ModelGatewayGemini(selected),
+    app.http,
+    {
+      messages: [
+        { role: "system", content: "roleplay" },
+        { role: "system", content: "instructions" },
+        { role: "user", content: "earlier" },
+        { role: "assistant", content: "previous reply" },
+        ...input.messages,
+      ],
+    },
+  ))
+  assert.deepEqual(result, { text: "hello" })
+  assert.deepEqual(bodies, [{
+    systemInstruction: { parts: [{ text: "roleplay" }, { text: "instructions" }] },
+    contents: [
+      { role: "user", parts: [{ text: "earlier" }] },
+      { role: "model", parts: [{ text: "previous reply" }] },
+      { role: "user", parts: [{ text: "hello" }] },
+    ],
+    generationConfig: {
+      thinkingConfig: { thinkingLevel: "XHIGH" },
+      maxOutputTokens: 65536,
+      stopSequences: ["<end>"],
+      seed: 0,
+      presencePenalty: 0,
+      frequencyPenalty: -0.5,
+    },
+    safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" }],
+  }])
+})
+
+test("Gemini preserves signed parts and matches parallel tool results across multiple rounds", async (t) => {
+  const bodies: { contents: unknown[]; tools: unknown; generationConfig: unknown; safetySettings?: unknown }[] = []
+  const parts = [
+    { text: "provider-secret", thought: true },
+    { text: "checking", thoughtSignature: "text-signature" },
+    {
+      functionCall: { name: "notebook-query", args: { queries: [{ keyword: "first", offset: 0, limit: 1 }] } },
+      thoughtSignature: "opaque-provider-context",
+    },
+    { functionCall: { id: "provider-call-id", name: "notebook-query", args: { queries: [] } } },
+  ]
+  const nextParts = [{ functionCall: { name: "notebook-query" }, thoughtSignature: "next-signature" }]
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    void readBody(request).then((body) => {
+      bodies.push(body as typeof bodies[number])
+      json(response, geminiResponse(bodies.length === 1 ? parts : bodies.length === 2 ? nextParts : [{ text: "done" }]))
+    })
+  })
+  const selected = await Effect.runPromise(resolveModel(Config({
+    models: {
+      default: "gemini/gemini-test",
+      gemini: { baseUrl, apiKey: Redacted.value(key), timeoutMs: 1000 },
+    },
+  }).models))
+  assert.equal(selected.provider, "gemini")
+  const model = ModelGatewayGemini(selected)
+  const toolInput: ModelInput = { ...input, tools: [notebookQueryTool] }
+  const first = await Effect.runPromise(generate(model, app.http, toolInput))
+  assert.equal(first.text, "checking")
+  assert.ok(first.toolCalls && first.continuation)
+  assert.equal(first.toolCalls.length, 2)
+  assert.equal(first.toolCalls[1]?.id, "provider-call-id")
+  assert.deepEqual(JSON.parse(first.toolCalls[0].arguments), { queries: [{ keyword: "first", offset: 0, limit: 1 }] })
+  assert.ok(!JSON.stringify(first).includes("provider-secret"))
+  assert.ok(!JSON.stringify(first).includes("opaque-provider-context"))
+  const secondInput: ModelInput = {
+    ...toolInput,
+    messages: [
+      ...toolInput.messages,
+      { role: "assistant", content: first.text, toolCalls: first.toolCalls, continuation: first.continuation },
+      ...first.toolCalls.map((call) => ({ role: "tool" as const, toolCallId: call.id, content: `result ${call.id}` })),
+    ],
+  }
+  const second = await Effect.runPromise(generate(model, app.http, secondInput))
+  assert.ok(second.toolCalls && second.continuation)
+  assert.notEqual(second.toolCalls[0].id, first.toolCalls[0].id)
+  assert.equal(second.toolCalls[0].arguments, "{}")
+  const third = await Effect.runPromise(generate(model, app.http, {
+    ...secondInput,
+    messages: [
+      ...secondInput.messages,
+      { role: "assistant", content: second.text, toolCalls: second.toolCalls, continuation: second.continuation },
+      { role: "tool", toolCallId: second.toolCalls[0].id, content: "last result" },
+    ],
+  }))
+  assert.deepEqual(third, { text: "done" })
+  for (const body of bodies) {
+    assert.deepEqual(body.generationConfig, {})
+    assert.equal(body.safetySettings, undefined)
+  }
+  assert.deepEqual(bodies[0]?.tools, [{
+    functionDeclarations: [{
+      name: notebookQueryTool.name,
+      description: notebookQueryTool.description,
+      parametersJsonSchema: notebookQueryTool.parameters,
+    }],
+  }])
+  assert.deepEqual(bodies[1]?.contents, [
+    { role: "user", parts: [{ text: "hello" }] },
+    { role: "model", parts },
+    {
+      role: "user",
+      parts: [
+        { functionResponse: { name: "notebook-query", response: { output: `result ${first.toolCalls[0].id}` } } },
+        {
+          functionResponse: {
+            name: "notebook-query",
+            id: "provider-call-id",
+            response: { output: "result provider-call-id" },
+          },
+        },
+      ],
+    },
+  ])
+  assert.deepEqual(bodies[2]?.contents, [
+    ...bodies[1]!.contents,
+    { role: "model", parts: nextParts },
+    { role: "user", parts: [{ functionResponse: { name: "notebook-query", response: { output: "last result" } } }] },
+  ])
+})
+
+test("Gemini rejects incomplete, blocked and malformed responses without exposing provider content", async (t) => {
+  let body: unknown
+  const { app, baseUrl } = await fixture(t, (_request, response) => json(response, body))
+  const model = ModelGatewayGemini({ baseUrl, apiKey: key, model: "gemini-test", timeoutMs: 1000 })
+  const toolInput: ModelInput = { ...input, tools: [notebookQueryTool] }
+  for (const [response, kind] of [
+    [geminiResponse([{ text: "provider-secret" }], "MAX_TOKENS"), "IncompleteResponse"],
+    [{ promptFeedback: { blockReason: "SAFETY" } }, "IncompleteResponse"],
+    [{ candidates: [{ finishReason: "SAFETY" }] }, "IncompleteResponse"],
+    [{ candidates: [] }, "InvalidResponse"],
+    [geminiResponse([{ text: " " }]), "InvalidResponse"],
+    [geminiResponse([{ text: "provider-secret", thought: true }]), "InvalidResponse"],
+    [geminiResponse([{ inlineData: { data: "provider-secret" } }]), "InvalidResponse"],
+    [geminiResponse([{ functionCall: { name: "unknown", args: {} } }]), "InvalidResponse"],
+    [geminiResponse([{ functionCall: { name: "notebook-query", args: "provider-secret" } }]), "InvalidResponse"],
+    [geminiResponse([
+      { functionCall: { id: "same", name: "notebook-query", args: {} } },
+      { functionCall: { id: "same", name: "notebook-query", args: {} } },
+    ]), "InvalidResponse"],
+  ] as const) {
+    body = response
+    assert.equal(await errorKind(generate(model, app.http, toolInput)), kind)
+  }
+  body = geminiResponse([{ functionCall: { name: "notebook-query", args: {} } }])
+  assert.equal(await errorKind(generate(model, app.http)), "IncompleteResponse")
+})
+
+test("Gemini model catalog paginates, filters generation models and registers dropdown options", async (t) => {
+  const requests: string[] = []
+  const { app, baseUrl } = await fixture(t, (request, response) => {
+    assert.equal(request.method, "GET")
+    assert.equal(request.headers["x-goog-api-key"], "private-api-key")
+    assert.equal(request.headers.authorization, undefined)
+    requests.push(request.url!)
+    json(response, requests.length === 1 ? {
+      models: [
+        { name: "models/gemini-first", supportedGenerationMethods: ["countTokens", "generateContent"] },
+        { name: "models/embedding", supportedGenerationMethods: ["embedContent"] },
+      ],
+      nextPageToken: "page+/=&",
+    } : { models: [{ name: "models/gemini-second", supportedGenerationMethods: ["generateContent"] }] })
+  })
+  await Effect.runPromise(registerModelSchema(app, {
+    default: "gemini/current",
+    gemini: { apiKey: Redacted.value(key), baseUrl: `${baseUrl}/v1beta` },
+  }).pipe(Effect.provide(ModelHttpKoishi(app.http))))
+  assert.deepEqual(requests, ["/v1beta/models", "/v1beta/models?pageToken=page%2B%2F%3D%26"])
+  const schema = app.schema.get(ModelSchemaName)
+  assert.ok(schema)
+  const options = JSON.stringify(schema)
+  for (const name of ["gemini/current", "gemini/gemini-first", "gemini/gemini-second"])
+    assert.ok(options.includes(name))
+  assert.ok(!options.includes("embedding"))
+})
+
+test("Gemini total timeout aborts the native HTTP response", async (t) => {
+  let markClosed = () => {}
+  const closed = new Promise<void>((resolve) => { markClosed = resolve })
+  const { app, baseUrl } = await fixture(t, (_request, response) => {
+    response.on("close", markClosed)
+    response.writeHead(200, { "Content-Type": "application/json" })
+    response.write("{")
+  })
+  assert.equal(await errorKind(generate(
+    ModelGatewayGemini({ baseUrl, apiKey: key, model: "gemini-test", timeoutMs: 100 }),
+    app.http,
+  )), "Timeout")
+  await closed
 })

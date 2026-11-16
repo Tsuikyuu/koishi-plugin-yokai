@@ -48,6 +48,12 @@ test("selected model credentials remain redacted and model updates validate inde
   const invalid = [
     { default: "other/model", deepseek: { apiKey: "fixture-secret" } },
     { default: "openai/model" },
+    { default: "gemini/model" },
+    { default: "gemini/model", gemini: { apiKey: " " } },
+    { default: "gemini/model", gemini: { apiKey: "fixture-secret", temperature: 1 } },
+    { default: "gemini/model", gemini: { apiKey: "fixture-secret", topP: 1 } },
+    { default: "gemini/model", gemini: { apiKey: "fixture-secret", topK: 40 } },
+    { default: "gemini/model", gemini: { apiKey: "fixture-secret", api: "responses" } },
     { default: "deepseek/model", deepseek: {} },
     { default: "deepseek/model", deepseek: { apiKey: " " } },
     { default: "openai/model", openai: { apiKey: "fixture-secret", temperature: 0.5 } },
@@ -58,5 +64,60 @@ test("selected model credentials remain redacted and model updates validate inde
   ]
   for (const models of invalid) {
     assert.equal((await Effect.runPromiseExit(resolveModel(models)))._tag, "Failure")
+  }
+})
+
+test("Gemini configuration resolves independently through the Koishi schema", async () => {
+  const raw = Config({
+    ...config,
+    models: {
+      default: "gemini/gemini-test",
+      gemini: {
+        apiKey: "fixture-secret",
+        thinkingLevel: "high",
+        maxOutputTokens: 65536,
+        stopSequences: ["<end>"],
+        seed: 0,
+        presencePenalty: 0,
+        frequencyPenalty: 0.5,
+        safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" }],
+      },
+    },
+  })
+  const resolved = await Effect.runPromise(resolveModel(raw.models))
+  assert.equal(resolved.provider, "gemini")
+  assert.equal(resolved.model, "gemini-test")
+  assert.equal(resolved.timeoutMs, 60000)
+  assert.equal(resolved.baseUrl, "https://generativelanguage.googleapis.com/v1beta")
+  assert.equal(resolved.thinkingLevel, "high")
+  assert.equal(resolved.maxOutputTokens, 65536)
+  assert.deepEqual(resolved.stopSequences, ["<end>"])
+  assert.equal(resolved.seed, 0)
+  assert.equal(resolved.presencePenalty, 0)
+  assert.equal(resolved.frequencyPenalty, 0.5)
+  assert.deepEqual(resolved.safetySettings, [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" }])
+  assert.equal(Redacted.value(resolved.apiKey), "fixture-secret")
+  assert.equal(JSON.stringify(resolved).includes("fixture-secret"), false)
+})
+
+test("Gemini rejects invalid generation settings before sending a request", async () => {
+  for (const settings of [
+    { thinkingLevel: "none" },
+    { thinkingBudget: 1000 },
+    { maxOutputTokens: 0 },
+    { maxOutputTokens: 1.5 },
+    { seed: 0.5 },
+    { seed: 2147483648 },
+    { stopSequences: [""] },
+    { stopSequences: ["a", "b", "c", "d", "e", "f"] },
+    { safetySettings: [{ category: "unknown", threshold: "OFF" }] },
+    { safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "unknown" }] },
+    { safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+    ] },
+  ]) {
+    const models = { default: "gemini/gemini-test", gemini: { apiKey: "fixture-secret", ...settings } }
+    assert.equal((await Effect.runPromiseExit(resolveModel(models as Config["models"])))._tag, "Failure")
   }
 })

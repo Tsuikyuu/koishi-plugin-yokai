@@ -33,6 +33,9 @@ models:
   openai:
     api: responses
     apiKey: sk-...
+  gemini:
+    apiKey: AIza...
+    timeoutMs: 60000
 characters:
   directory: characters
   presets:
@@ -44,6 +47,22 @@ roleplay:
 这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `temperature` 和 `topP`，OpenAI 提供 `api` 和 `reasoningEffort`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
 
 `models.default` 不再手动输入：插件启动时用已填写密钥的供应商请求 `{baseUrl}/models`，把返回的 `provider/model` 注册为控制台下拉选项，当前配置值始终保留在选项中。请求失败只影响可选项，不阻断启动；修改供应商密钥或地址后重载插件以刷新列表。插件未运行时（例如尚未启用）没有列表可注册，控制台显示回退输入框。
+
+使用 Gemini 时填写 `models.gemini.apiKey`，并选择 `gemini/<模型 ID>`。原生 API 默认根地址为 `https://generativelanguage.googleapis.com/v1beta`；自定义 `baseUrl` 需包含 API 版本，不包含 `/models`。通过 `x-goog-api-key` 请求头认证，使用非流式 `generateContent`，支持系统指令、文本和多轮工具调用。模型列表自动翻页，仅显示支持 `generateContent` 的模型。工具循环保留原始 `thoughtSignature`；推理正文和签名不会进入角色回复或调用记录。
+
+Gemini 配置面向新模型，不再提供或发送 `temperature`、`topP`、`topK`。已有配置中的这些字段需删除。以下选项均位于 `models.gemini`，留空时使用供应商默认值：
+
+| 参数 | 说明 |
+| --- | --- |
+| `thinkingLevel` | `minimal`、`low`、`medium`、`high`、`xhigh`；实际支持的档位取决于模型，例如 Gemini 4 Hydrogen 支持 `xhigh`，不支持 `minimal` |
+| `maxOutputTokens` | 正整数，限制思考与回答的总 token 数；上限取决于模型，达到上限的未完成回复按调用失败处理 |
+| `stopSequences` | 最多 5 个非空停止字符串；匹配的字符串不包含在输出中 |
+| `seed` | 32 位有符号整数随机种子，固定值不保证完全可复现 |
+| `presencePenalty` | 存在惩罚，正值抑制已出现的词，负值鼓励重复 |
+| `frequencyPenalty` | 频率惩罚，按词的出现次数调整重复倾向 |
+| `safetySettings` | `{ category, threshold }` 列表，每个类别最多一项；未配置的类别使用供应商默认值 |
+
+`safetySettings.category` 可选 `HARM_CATEGORY_HARASSMENT`、`HARM_CATEGORY_HATE_SPEECH`、`HARM_CATEGORY_SEXUALLY_EXPLICIT`、`HARM_CATEGORY_DANGEROUS_CONTENT`、`HARM_CATEGORY_JAILBREAK`；`threshold` 可选 `OFF`、`BLOCK_NONE`、`BLOCK_ONLY_HIGH`、`BLOCK_MEDIUM_AND_ABOVE`、`BLOCK_LOW_AND_ABOVE`。参数支持情况由所选模型决定，供应商返回的不支持错误按模型调用失败处理。
 
 `models` 使用 Koishi 响应式配置，每轮取得频道锁后读取一次，该轮工具循环固定使用同一快照。其他配置改变由 Koishi 重载插件。每轮重新读取角色预设文件；修改日常生活设定后重载插件以重新生成日程。
 

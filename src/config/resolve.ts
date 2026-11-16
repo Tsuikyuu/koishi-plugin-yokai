@@ -6,6 +6,7 @@ import { AppConfig } from "./validation"
 import { ConfigurationError } from "./error"
 import type { Config } from "./config"
 import type { ResolvedModelConfig } from "./resolved-model"
+import type { Provider } from "../models/provider"
 
 const fail = (field: string, reason: string) => new ConfigurationError({ path: "yokai", field, reason })
 
@@ -15,7 +16,7 @@ export const resolveModel = Effect.fn("Yokai.resolveModel")(function* (
   const models = yield* Schema.decodeUnknownEffect(AppConfig.fields.models, { onExcessProperty: "error" })(raw).pipe(
     Effect.mapError(() => fail("models", "模型配置不符合契约")),
   )
-  const provider = models.default.startsWith("deepseek/") ? "deepseek" : "openai"
+  const provider = models.default.slice(0, models.default.indexOf("/")) as Provider
   const settings = models[provider]
   if (!settings) return yield* Effect.fail(fail(`models.${provider}`, "缺少所选模型的供应商配置"))
   const { apiKey, ...rest } = settings

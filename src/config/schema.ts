@@ -1,5 +1,7 @@
 import { Schema } from "koishi"
 import { ReasoningEfforts } from "../models/openai/config"
+import { SafetyCategories, SafetyThresholds, ThinkingLevels } from "../models/gemini/config"
+import { DefaultBaseUrl } from "../models/provider"
 import type { Config as PluginConfig } from "./config"
 
 export type Config = PluginConfig
@@ -21,7 +23,7 @@ const sampling = {
   topP: Schema.number().min(0).max(1).description("可选 Top P"),
 }
 
-export const Config: Schema<Config> = Schema.intersect([
+export const Config: Schema<any, Config> = Schema.intersect([
   Schema.object({
     version: Schema.const(1).default(1).hidden(),
     timezone: Schema.string().default("Asia/Shanghai").description("角色日程和新建定时任务的 IANA 时区"),
@@ -35,6 +37,30 @@ export const Config: Schema<Config> = Schema.intersect([
         api: Schema.union(["chat-completions", "responses"]).default("chat-completions").description("OpenAI API 类型"),
         reasoningEffort: Schema.union(ReasoningEfforts).description("可选推理强度，仅用于支持的模型"),
       }).description("OpenAI"),
+      gemini: Schema.object({
+        ...provider,
+        baseUrl: Schema.string()
+          .role("link")
+          .default(DefaultBaseUrl.gemini)
+          .description("API 根地址，包含 API 版本，不含 /models"),
+        thinkingLevel: Schema.union(ThinkingLevels)
+          .description("可选推理强度，支持的档位取决于模型；留空使用模型默认值"),
+        maxOutputTokens: Schema.natural().min(1).max(2147483647)
+          .description("可选生成 token 上限，包含思考与回答；留空使用模型默认值"),
+        stopSequences: Schema.array(Schema.string().min(1)).max(5)
+          .description("可选停止序列，最多 5 个；匹配的序列不会包含在输出中"),
+        seed: Schema.number().step(1).min(-2147483648).max(2147483647)
+          .description("可选随机种子，整数；固定种子不保证输出完全一致"),
+        presencePenalty: Schema.number()
+          .description("可选存在惩罚；正值抑制已出现的词，负值鼓励重复"),
+        frequencyPenalty: Schema.number()
+          .description("可选频率惩罚；按词的出现次数调整重复倾向"),
+        safetySettings: Schema.array(Schema.object({
+          category: Schema.union(SafetyCategories).required().description("过滤类别"),
+          threshold: Schema.union(SafetyThresholds).required().description("过滤阈值"),
+        })).max(SafetyCategories.length)
+          .description("可选内容过滤设置，每个类别最多一项；未设置的类别使用供应商默认值"),
+      }).description("Gemini"),
     }).description("模型"),
   }),
   Schema.object({
