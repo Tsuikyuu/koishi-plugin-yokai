@@ -41,6 +41,25 @@ const messageFromRow = (row: HistoryRow) =>
     ...(row.quote ? { quote: row.quote } : {}),
   })
 
+// 只抽取错误类型、系统错误码、HTTP 状态与平台说明；不写回包含 token 的请求 URL。
+const describePlatformError = (error: unknown): string => {
+  const parts: string[] = []
+  if (error instanceof Error) parts.push(error.name)
+  let current: unknown = error
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth++) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === "string") {
+      parts.push(code)
+      break
+    }
+    current = (current as { cause?: unknown }).cause
+  }
+  const response = (error as { response?: { status?: unknown; data?: unknown } }).response
+  if (typeof response?.status === "number") parts.push(`HTTP ${response.status}`)
+  if (response?.data !== undefined) parts.push(JSON.stringify(response.data).slice(0, 300))
+  return parts.join(" ") || "未知错误"
+}
+
 export const createKoishiHistory = (
   ctx: Context,
   serialize: Semaphore.Semaphore["withPermit"],
@@ -207,8 +226,10 @@ export const createKoishiHistory = (
             const ids = yield* Effect.tryPromise({
               try: () =>
                 session.bot.sendMessage(session.channelId!, encodeAction(action), session.event.referrer, { session }),
-              catch: () => new ChannelPlatformError({ operation: "send" }),
-            })
+              catch: (error) => new ChannelPlatformError({ operation: "send", detail: describePlatformError(error) }),
+            }).pipe(
+              Effect.tapError((error) => Effect.logWarning(`平台发送失败：${error.detail ?? "未知错误"}`)),
+            )
             const message = yield* Schema.decodeUnknownEffect(Message)({
               id: ids[0],
               sender: session.selfId,

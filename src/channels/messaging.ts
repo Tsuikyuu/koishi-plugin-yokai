@@ -15,6 +15,8 @@ export type ChannelHistoryQuery =
 
 export class ChannelPlatformError extends Data.TaggedError("ChannelPlatformError")<{
   readonly operation: "history" | "send"
+  // 脱敏后的失败分类（错误类型、系统错误码、HTTP 状态与供应商说明），只进入后台日志。
+  readonly detail?: string
 }> {}
 
 export class ChannelPlatform extends Context.Service<
