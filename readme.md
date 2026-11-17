@@ -1,208 +1,85 @@
 # koishi-plugin-yokai
 
-基于 Effect 与 Koishi 原生服务的 AI 角色扮演插件。使用 `yarn new yokai --no-git` 创建，沿用模板的 Yakumo 构建。角色对话、笔记、状态、日常时间表、XML 动作和唤醒任务沿用原设计。
+Koishi AI 角色扮演插件。
 
-## 使用
+## 快速开始
 
-插件依赖 Koishi 的 `database` 和 `http` 服务；数据库类型、连接、HTTP 代理及全局超时由对应 Koishi 插件配置。Yokai 不创建独立数据库连接或网络客户端。
+1. **启用依赖服务**：确保 Koishi 已启用 `http` 插件和任一 `database` 插件（如 `database-sqlite`）。
+2. **放置角色文件**：在 `data/yokai/characters/` 下创建角色预设文件（如 `companion.yml`，格式见下方模板）。
 
-```sh
-# 在 Koishi 模板根目录执行
-yarn install
-yarn workspace koishi-plugin-yokai check
-yarn build yokai
-yarn start
-```
+### 基础配置项
 
-开发模式使用模板原有的 `yarn dev`。插件配置已加入 `koishi.yml` 的 `~yokai`，暂未启用。先在控制台设置 Koishi 过滤器，选择要参与的账号和频道，再启用插件。
+| 配置项                    | 默认值                         | 说明                                                    |
+| ------------------------- | ------------------------------ | ------------------------------------------------------- |
+| `timezone`                | `Asia/Shanghai`                | 角色日程与定时任务使用的 IANA 时区                      |
+| `models.default`          | `deepseek/deepseek-chat`       | 当前使用的模型（`provider/model`）                      |
+| `characters.directory`    | `characters`                   | 角色预设目录（相对于 `data/yokai/`）                    |
+| `characters.presets`      | `{ companion: companion.yml }` | 角色 ID 到 YAML 文件相对路径的映射                      |
+| `roleplay.character`      | `companion`                    | 新频道首次触发时绑定的默认角色 ID（已有频道保持原绑定） |
+| `roleplay.routineEnabled` | `true`                         | 是否在启动时生成角色日常作息并在对话中启用日程          |
 
-默认在启用时为默认角色和已有频道绑定的角色调用模型生成日常时间表，可通过 `roleplay.routineEnabled` 关闭；参与者消息和到期唤醒也会调用模型。启动校验或模型生成失败只进入后台日志。
+### 模型供应商可选参数
 
-## 配置与文件
+每个供应商均支持 `apiKey`、`baseUrl`（留空使用官方默认地址）和 `timeoutMs`（默认 `60000` 毫秒）。未选用的供应商可留空。
 
-Config Schema 管理模型选择、供应商参数、时区、角色文件映射、默认角色和日程开关；角色预设正文不放入配置。
+- **DeepSeek（`models.deepseek`）**
+  - `reasoningEffort`：`none`（关闭思考）或 `low / high / max`
+  - `maxOutputTokens`：`1–393216` 的整数
+  - `stopSequences`：最多 16 个停止字符串
+  - `temperature`（`0–2`）、`topP`（`(0, 1]`）：采样参数，实际生效范围取决于具体模型与思考模式
+- **OpenAI（`models.openai`）**
+  - `reasoningEffort`：`none / minimal / low / medium / high / xhigh / max`
+  - `reasoningMode`：`standard / pro`
+  - `reasoningContext`：`auto / current_turn / all_turns`
+  - `verbosity`：`low / medium / high`（回答详细程度）
+  - `maxOutputTokens`：至少 `16` 的整数
+- **Gemini（`models.gemini`）**
+  - `thinkingLevel`：`minimal / low / medium / high / xhigh`
+  - `maxOutputTokens`：正整数
+  - `stopSequences`：最多 5 个停止字符串
+  - `seed`、`presencePenalty`、`frequencyPenalty`、`safetySettings`
+
+## 角色预设文件
+
+角色设定保存在独立的 YAML 文件中（默认位于 `data/yokai/characters/`），修改正文后下一轮对话自动生效；若开启了日程且修改了作息相关设定，重载插件即可重新生成日程。
 
 ```yaml
 version: 1
-timezone: Asia/Shanghai
-models:
-  default: deepseek/deepseek-chat
-  deepseek:
-    apiKey: sk-...
-    timeoutMs: 60000
-  openai:
-    apiKey: sk-...
-  gemini:
-    apiKey: AIza...
-    timeoutMs: 60000
-characters:
-  directory: characters
-  presets:
-    companion: companion.yml
-roleplay:
-  character: companion
-  routineEnabled: true
+
+character:
+  id: companion # 需与 characters.presets 中的键名一致
+  name: 小追求
+  aliases:
+    - 小追求
+    - "@小追求"
+  basicSetting: |
+    基本身份与聊天背景设定。
+  detailedSetting: |
+    性格、喜好、生活习惯等详细设定。
+  scene: |
+    当前所处的交流场景说明。
+  style: |
+    说话口吻、用词习惯与对话示例。
+  guidance:
+    - 何时回应、何时保持沉默等行为准则。
+
+initialState:
+  emotion: 平静
+  condition: 在线闲聊
+  activity: 看群友聊天
+  short_memory: ""
 ```
 
-这段配置属于 Koishi 的插件配置，不再另行读取原型 `config.yml`。供应商设置保留 `baseUrl`；DeepSeek 提供 `reasoningEffort`、`maxOutputTokens`、`stopSequences`、`temperature` 和 `topP`；OpenAI 提供 `reasoningEffort`、`maxOutputTokens`、`verbosity`、`reasoningMode` 和 `reasoningContext`。API 密钥直接填写在所选供应商的 `apiKey` 中，控制台以密码框显示；未选用的供应商可以留空。密钥不会写入模型记录或终端日志。
-
-`models.default` 不再手动输入：插件启动时用已填写密钥的供应商请求 `{baseUrl}/models`，把返回的 `provider/model` 注册为控制台下拉选项，当前配置值始终保留在选项中。保存模型配置后自动刷新列表，包含供应商密钥和地址的修改；新一轮刷新会中断过时请求。请求失败只影响可选项，不阻断启动，并在后台日志显示供应商及脱敏错误类别。插件未运行时（例如尚未启用）没有列表可注册，控制台显示回退输入框。
-
-DeepSeek 的 `models.deepseek.reasoningEffort` 可选 `none`、`low`、`high`、`max`，对应请求中的 `reasoning_effort`。`none` 关闭思考，其他档位开启思考；留空不发送该参数，使用供应商默认值（当前官方模型默认开启思考，强度为 `high`）。思考模式工具循环保留原始 `reasoning_content` 用于续接，推理正文不会进入角色回复或调用记录。
-
-以下可选参数也位于 `models.deepseek`：
-
-| 参数 | API 字段 | 说明 |
-| --- | --- | --- |
-| `maxOutputTokens` | `max_tokens` | `1–393216` 的整数，限制思考与回答的总 token 数；留空使用供应商默认值，默认上限随思考模式和强度变化 |
-| `stopSequences` | `stop` | 最多 16 个非空停止字符串，原样发送；匹配的字符串不包含在输出中；留空或空列表不发送该参数 |
-
-达到 token 上限而返回 `finish_reason: length` 时按未完成响应处理，截断内容不会作为角色回复交付。
-
-`temperature` 的合法范围为 `[0, 2]`，`topP` 为 `(0, 1]`（不能为 `0`）；留空使用供应商默认值。根据 [DeepSeek 官方接口文档](https://api-docs.deepseek.com/api/create-chat-completion)，采样参数的实际效果取决于模型和模式：
-
-| 模型 / 模式 | `temperature` | `topP` |
-| --- | --- | --- |
-| `deepseek-flash` 思考模式 | 忽略 | 生效，默认 `1`；低于 `0.95` 按 `0.95` 处理 |
-| `deepseek-flash` 非思考模式 | 生效，默认 `1` | 忽略，固定为 `1` |
-| `deepseek-v4-pro` 思考模式 | 忽略 | 忽略；启用工具调用时固定为 `0.95`，否则为 `1` |
-| `deepseek-v4-pro` 非思考模式 | 生效，默认 `1` | 生效，默认 `1` |
-
-适配器原样发送显式配置的合法采样值，由供应商按模型和模式处理。使用 `deepseek-v4-pro` 非思考模式时，官方建议只调整 `temperature` 或 `topP` 中的一项。
-
-OpenAI 统一使用 Responses API。以下参数均位于 `models.openai`，留空时不发送，使用供应商默认值：
-
-| 参数 | API 字段 | 说明 |
-| --- | --- | --- |
-| `reasoningEffort` | `reasoning.effort` | `none / minimal / low / medium / high / xhigh / max`，支持的档位取决于模型 |
-| `maxOutputTokens` | `max_output_tokens` | 推理与回答的总 token 上限，至少 16 的整数，实际最大值取决于模型 |
-| `verbosity` | `text.verbosity` | `low / medium / high`，控制回答详细程度 |
-| `reasoningMode` | `reasoning.mode` | `standard / pro`，推理执行模式，与 `reasoningEffort` 独立 |
-| `reasoningContext` | `reasoning.context` | `auto / current_turn / all_turns`，控制已回传推理项的使用范围 |
-
-已有配置中的 `api: responses` 仍可读取，控制台不再显示接口选择；`api: chat-completions` 会在配置校验时失败，需删除该项以使用 Responses。模型级支持情况由供应商校验，例如 GPT-6 Astra 不支持 `reasoningEffort: none`。参考 [Responses 接口文档](https://developers.openai.com/api/reference/resources/responses/methods/create)。
-
-Responses 使用 `store: false`，在当前工具循环中显式回传加密推理上下文；`reasoningContext` 不会额外持久化跨轮推理或重建历史推理项。token 上限导致的未完成响应按模型调用失败处理，不交付截断正文。
-
-使用 Gemini 时填写 `models.gemini.apiKey`，并选择 `gemini/<模型 ID>`。原生 API 默认根地址为 `https://generativelanguage.googleapis.com/v1beta`；自定义 `baseUrl` 需包含 API 版本，不包含 `/models`。通过 `x-goog-api-key` 请求头认证，使用非流式 `generateContent`，支持系统指令、文本和多轮工具调用。模型列表自动翻页，仅显示支持 `generateContent` 的模型。工具循环保留原始 `thoughtSignature`；推理正文和签名不会进入角色回复或调用记录。
-
-Gemini 配置面向新模型，不再提供或发送 `temperature`、`topP`、`topK`。已有配置中的这些字段需删除。以下选项均位于 `models.gemini`，留空时使用供应商默认值：
-
-| 参数 | 说明 |
-| --- | --- |
-| `thinkingLevel` | `minimal`、`low`、`medium`、`high`、`xhigh`；实际支持的档位取决于模型，例如 Gemini 4 Hydrogen 支持 `xhigh`，不支持 `minimal` |
-| `maxOutputTokens` | 正整数，限制思考与回答的总 token 数；上限取决于模型，达到上限的未完成回复按调用失败处理 |
-| `stopSequences` | 最多 5 个非空停止字符串；匹配的字符串不包含在输出中 |
-| `seed` | 32 位有符号整数随机种子，固定值不保证完全可复现 |
-| `presencePenalty` | 存在惩罚，正值抑制已出现的词，负值鼓励重复 |
-| `frequencyPenalty` | 频率惩罚，按词的出现次数调整重复倾向 |
-| `safetySettings` | `{ category, threshold }` 列表，每个类别最多一项；未配置的类别使用供应商默认值 |
-
-`safetySettings.category` 可选 `HARM_CATEGORY_HARASSMENT`、`HARM_CATEGORY_HATE_SPEECH`、`HARM_CATEGORY_SEXUALLY_EXPLICIT`、`HARM_CATEGORY_DANGEROUS_CONTENT`、`HARM_CATEGORY_JAILBREAK`；`threshold` 可选 `OFF`、`BLOCK_NONE`、`BLOCK_ONLY_HIGH`、`BLOCK_MEDIUM_AND_ABOVE`、`BLOCK_LOW_AND_ABOVE`。参数支持情况由所选模型决定，供应商返回的不支持错误按模型调用失败处理。
-
-`roleplay.routineEnabled` 默认为 `true`，统一控制日程生成与日程上下文拼装。设为 `false` 后，启动时不生成日常时间表，对话中不附加 `daily_routine`、`current_activity` 和日程调整提示，也不执行 `routine` 动作。`wake-up` 定时任务和 `next-reply` 短期唤醒仍可使用。
-
-`models` 使用 Koishi 响应式配置，每轮取得频道锁后读取一次，该轮工具循环固定使用同一快照。其他配置（包括日程开关）改变由 Koishi 重载插件。每轮重新读取角色预设文件；日程开启时，修改日常生活设定后重载插件以重新生成日程。
+## 数据目录与使用提示
 
 ```text
-Koishi 项目/
-  data/yokai/
-    characters/companion.yml   # 原格式的角色预设
-    stickers/<sha256>          # 角色收藏的表情包内容寻址存储
-    media/<sha256>             # 入站图片内容寻址存储
-    logs/<调用 ID>/
-      input.json              # 模型输入与上下文
-      result.json             # 输出或脱敏错误
+data/yokai/
+  characters/   # 角色预设 YAML 文件
+  stickers/     # 角色自主收藏的表情包图片（单角色上限 40 张，跨频道互通）
+  media/        # 聊天接收的图片缓存（支持 PNG/JPEG/WebP/GIF，单张上限 10 MiB）
+  logs/         # 每次模型调用的输入与输出记录
 ```
 
-`characters.directory` 相对于 `data/yokai`，必须位于该目录内；预设路径相对于角色目录。缺失、格式错误、ID 不匹配和路径越界都会明确报错，不自动替换为默认角色。
-
-本次迁移复制了原角色文件和 281 个模型记录文件，并核对内容一致；原型数据库保留原位，按用户选择不导入。当前模型所需的 API 密钥已写入 `koishi.yml` 的插件配置。插件运行不依赖原型仓库路径。
-
-模型记录包含角色设定、聊天内容、角色独白和工具结果，与参与者历史分开。记录保持原输入/输出文件格式，新建记录目录权限为 `0700`，文件为 `0600`；没有自动清理。
-
-## Koishi 原生能力
-
-- 使用 `Session`、`Bot` 和 Koishi 过滤器处理消息及定时交付，没有自有平台连接或适配器注册体系。
-- 消息经 Koishi 中间件进入：自身消息、频道建档、`flag` 忽略和受理人（`assignee`）判断都由 Koishi 完成；匹配到指令的消息不触发角色扮演。
-- 频道就是 Koishi 的 `channel` 表：角色绑定和角色状态作为扩展字段 `yokaiPreset`、`yokaiState` 存在其中。群聊由 Koishi 中间件建档，私聊按 Koishi 的 `autoAssign` 规则补建；关闭 `autoAssign` 时未建档的频道不参与。定时与短期唤醒由频道受理人对应的机器人发送。
-- 通过 `ctx.model` 扩展 `channel`，并声明 `yokai_sticker`、`yokai_note`、`yokai_note_relation`、`yokai_schedule`、`yokai_schedule_run` 和 `yokai_history`；读写和事务全部交给 `ctx.database`。
-- 模型请求通过 Effect 包裹注入的 `ctx.http`，沿用全局请求配置和代理钩子，支持总超时及取消。
-- 业务日志使用 Effect 日志入口，由当前插件的 Koishi logger 输出。
-- 消息监听、定时器和依赖关系由 Koishi 管理，Effect scope 管理进行中的业务任务与请求。
-
-频道历史仅保存插件接收的参与者消息和确认发送的角色消息，与 Koishi 频道相同按平台和频道 ID 隔离；上下文读取最近 50 条并排除触发消息。历史存在 Koishi 数据库中，不回填插件启用前的远端历史。语音等非图片附件仍只提供类型标记，不分析内容；图片与表情包的输入输出见下节。
-
-错误、执行进度、模型调用记录和工具结果不会作为消息发送，也不会混入参与者历史。模型输出使用纯文本及显式引用发送，不能注入 Koishi 消息元素。
-
-## 多模态输入与输出
-
-### 入站图片与表情包
-
-- 参与者消息中的图片/表情包按真实内容格式识别（PNG、JPEG、WebP、GIF，单张上限 10 MiB），按 SHA-256 内容寻址保存到 `data/yokai/media/`，相同图片全局只存一份；数据库中只保留元数据。
-- 获取失败、超出上限或格式不受支持时，消息仍然入库，图片片段标记为不可用，只写入后台调试日志；不向聊天或历史插入错误文本。
-- `@` 提及保留目标参与者 ID 与昵称，不再压平为纯文本；历史表新增结构化 `parts` 列，旧记录按原 `text` 列回退读取。
-- Telegram 适配器的 `files.local` 只用于自建 TDLib Bot API 服务；使用官方 Bot API 时必须保持关闭。开启后适配器会把服务器返回的 `photos/file_*.jpg` 当作本机路径读取并失败，消息中的图片会变成没有 `src` 的空元素。另需注意 `@satorijs/adapter-telegram@4.5.11` 在官方 API 模式下会把相对路径直接交给 `ctx.http.file`，触发 `Invalid URL`（上游 [satorijs/satori#346](https://github.com/satorijs/satori/issues/346)）；需要为 `$getFile` 传入由 `file.config.endpoint` 拼出的绝对地址，或改用自建本地 Bot API 服务。
-
-### 随请求附带的图片
-
-- 只有当前模型声明支持图片输入时才附带画面；`/models` 返回 `input_modalities` 时以其是否包含 `image` 为准，未声明时按供应商默认能力处理。DeepSeek 的 `deepseek-flash` 支持图片，`deepseek-v4-pro` 不支持，切换后自动改为只看文字。
-- 窗口是确定性的：本次触发消息、其引用消息，再由新到旧补齐最近历史；最多 4 张、合计不超过 12 MiB，相同内容只附带一次。
-- 消息中的 `<image ... attached="true" ref="img_1" />` 表示画面已随请求附带；`attached="false"` 表示历史图片未附带，模型不会编造内容。
-- 图片以 data URL 或供应商原生内联块发送（DeepSeek/OpenAI 使用 base64 data URL，Gemini 使用 `inlineData`）；模型调用记录的 `input.json` 只保留 `sha256` 和大小，不写入图片正文。
-
-### 出站提及与角色表情包管理
-
-角色可以在 `<message>` 中内联 `<at user="实际参与者ID" />` 点名群友；私聊或引用当前上下文之外的参与者会被拒绝，整轮动作在发送前统一校验。
-
-角色表情包按角色 ID 全局互通（上限 40 张），元数据保存在 `yokai_sticker` 表，图片二进制按 SHA-256 保存在 `data/yokai/stickers/`（与临时聊天媒体 `data/yokai/media/` 隔离）。上下文在用户消息的 `<stickers>` 中全量展示已有表情包及简介；历史或入站消息中若命中已知表情包哈希，直接回显为 `<sticker id="...">简介</sticker>`，不重复占用 4 张图片视觉窗口。
-
-在 `<actions>` 中支持发送与自主增删改表情包：
-
-```xml
-<sticker-save ref="img_1" id="猫猫疑惑">白猫歪头满脸问号，用于表达疑惑或听不懂</sticker-save>
-<sticker-update id="猫猫疑惑">白猫歪头满脸问号，适合装傻或反问</sticker-update>
-<sticker-delete id="旧贴图ID" />
-<sticker id="猫猫疑惑" quote="实际消息ID" />
-```
-
-`sticker-save` 只能引用本轮实际附带画面的图片 `ref`，同角色禁止重名或重复收藏同一张图；支持同轮先删除旧表情包腾出容量再收藏新图，也支持收藏后同轮紧接着发送。
-
-## 可逆生命周期
-
-模块全局没有可变运行状态。依赖服务缺失时插件等待；服务移除、插件停用或重载时移除监听与定时器，并中断模型请求和未完成回合。恢复依赖后重新初始化，不保留旧任务或重复监听。
-
-已交给平台适配器的发送没有统一取消 API；卸载会等待发送及确认后的历史写入结算，再阻止后续动作。已发送消息不会撤回。不可取消的数据库事务也等待结算后释放资源；业务数据在操作时持久化，不依赖卸载时保存。
-
-日常时间表与短期 `next-reply` 条件保存在当前插件实例中，重载后重新生成或清空。频道状态、笔记、长期 `wake-up` 任务和参与者历史由数据库保留。已有频道保留角色绑定，修改默认角色只影响新频道。
-
-## 代码边界
-
-目录按功能组织，同一功能的数据、契约、实现和数据库表定义放在一起。契约与实现保持独立文件，通过显式依赖组装；业务语义与持久化格式保持不变。
-
-```text
-src/
-  index.ts           # Koishi 插件入口
-  config/            # 配置契约、Schema、校验与解析
-  media/             # 图片格式识别与字节上限
-  characters/        # 角色、预设、表情包、角色状态、文件加载与日常生成
-  channels/          # Koishi 频道上的角色绑定、参与者消息、历史、媒体与发送
-  dialogue/          # 对话编排、上下文、响应协议、模型工具与短期唤醒
-    context/
-    response/
-    tools/
-    next-reply/
-  notebook/          # 笔记、关联、查询与 Koishi 存储
-  scheduling/        # 通用长期任务、时间计算、领取与执行
-  models/            # 模型协议、供应商、HTTP 与调用记录
-    records/
-  runtime/           # 服务组装、日志及 Koishi 生命周期
-```
-
-例如，笔记功能的 `note.ts` 定义数据，`store.ts` 定义存储契约，`koishi-store.ts` 实现存储，`tables.ts` 与 `register-tables.ts` 声明和注册对应数据库表。修改笔记功能可以在同一目录完成。
-
-跨模块直接导入所属文件，不经过全局聚合导出。角色状态属于 `characters`，频道仅引用它；频道历史只接受消息 ID 或时间截止条件，不依赖对话触发原因；日常生成提示词属于角色模块，日常在对话中的展示属于上下文模块。长期调度保持通用，具体唤醒角色的工具和载荷属于 `dialogue/tools`。
-
-`runtime` 负责选择实现和组装；功能模块不能反向依赖 `runtime` 或 `config`。架构测试检查功能依赖无环、契约不依赖具体实现，避免目录调整后重新形成隐式耦合。
-
-测试使用真实 Koishi Context、SQLite 插件、模拟 Bot 和本地 HTTP 服务，不调用付费模型或真实聊天平台。
+- **图片与表情包**：选用支持图片输入的模型时，角色会自动查看近期聊天图片，并按自身喜好收藏、管理与发送表情包；切换到纯文本模型时自动只读文字，仍可发送已收藏的表情包。
+- **指令共存**：匹配到其他 Koishi 指令的消息不会触发角色回复。
+- **Telegram 图片注意**：使用官方 Bot API 时，请保持 Telegram 适配器的 `files.local` 为关闭状态。
