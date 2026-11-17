@@ -31,7 +31,7 @@ const fetchBytes = (http: HTTP, url: string) =>
         responseType: async (raw) => {
           if (!raw.ok) {
             await raw.body?.cancel()
-            throw new Error("status")
+            throw new Error(`HTTP ${raw.status}`)
           }
           const declared = Number(raw.headers.get("content-length") ?? "")
           if (Number.isFinite(declared) && declared > MaxImageBytes) {
