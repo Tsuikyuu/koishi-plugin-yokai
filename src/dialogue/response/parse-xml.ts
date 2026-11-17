@@ -5,6 +5,7 @@ import { attributes, container, invalid, messageSegments, responseSections, text
 
 type MessageSegment = { readonly text: string } | { readonly at: string }
 type OutboundPart = { readonly type: "text"; readonly text: string } | { readonly type: "at"; readonly user: string }
+const LinkKinds: ReadonlyArray<"supplements" | "corrects"> = ["supplements", "corrects"]
 
 // 去掉首尾标注用的空白与空文本片段；正文内部的空白保持原样。
 const trimParts = (segments: ReadonlyArray<MessageSegment>): ReadonlyArray<OutboundPart> => {
@@ -23,8 +24,8 @@ const trimParts = (segments: ReadonlyArray<MessageSegment>): ReadonlyArray<Outbo
       continue
     }
     const start = index === first ? segment.text.trimStart() : segment.text
-    const text = index === last ? start.trimEnd() : start
-    if (text !== "") parts.push({ type: "text", text })
+    const value = index === last ? start.trimEnd() : start
+    if (value !== "") parts.push({ type: "text", text: value })
   }
   return parts
 }
@@ -44,13 +45,30 @@ export const decodeChannelResponse = (xml: string): ChannelResponse => {
       }
       case "sticker": {
         attributes(node, ["id"], ["quote"])
-        text(node)
+        if (text(node).trim() !== "") return invalid()
         const quote = node.attributes.quote
         return { type: "sticker", stickerId: node.attributes.id, ...(quote === undefined ? {} : { quote }) }
       }
+      case "sticker-save": {
+        attributes(node, ["ref", "id"])
+        const summary = text(node).trim()
+        if (summary === "") return invalid()
+        return { type: "sticker-save", ref: node.attributes.ref, stickerId: node.attributes.id, summary }
+      }
+      case "sticker-update": {
+        attributes(node, ["id"])
+        const summary = text(node).trim()
+        if (summary === "") return invalid()
+        return { type: "sticker-update", stickerId: node.attributes.id, summary }
+      }
+      case "sticker-delete": {
+        attributes(node, ["id"])
+        if (text(node).trim() !== "") return invalid()
+        return { type: "sticker-delete", stickerId: node.attributes.id }
+      }
       case "note-add": {
         attributes(node, [], ["supplements", "corrects"])
-        const links = (["supplements", "corrects"] as const).flatMap((kind) => {
+        const links = LinkKinds.flatMap((kind) => {
           const ids = node.attributes[kind]
           if (ids === undefined) return []
           if (ids.trim() === "") return invalid()
@@ -75,7 +93,7 @@ export const decodeChannelResponse = (xml: string): ChannelResponse => {
         const userId = node.attributes.user_id
         if (condition !== "message_from_user" && condition !== "silence") return invalid()
         if (userId === undefined) return invalid()
-        text(node)
+        if (text(node).trim() !== "") return invalid()
         const seconds = node.attributes.seconds
         const maxWaitSeconds = node.attributes.max_wait_seconds
         if (seconds !== undefined && !/^\d+$/.test(seconds)) return invalid()
@@ -91,7 +109,7 @@ export const decodeChannelResponse = (xml: string): ChannelResponse => {
       }
       default:
         throw new ResponseParseError({
-          reason: `actions 包含不支持的元素 <${node.name}>；仅允许 message、sticker、note-add、routine 和 next-reply`,
+          reason: `actions 包含不支持的元素 <${node.name}>；仅允许 message、sticker、sticker-save、sticker-update、sticker-delete、note-add、routine 和 next-reply`,
         })
     }
   })
@@ -116,6 +134,6 @@ export const parseChannelResponse: ChannelResponseParser = (xml) =>
         ? error
         : new ResponseParseError({
             reason:
-              "频道响应 XML 结构或字段无效：response 应依次包含 think、actions、status；message 正文为纯文本且只能内联 <at user=\"ID\" />，sticker 使用 id 属性，note-add 关联使用 supplements/corrects 属性，routine 使用 start/end 属性，next-reply 使用 type/user_id 属性",
+              "频道响应 XML 结构或字段无效：response 应依次包含 think、actions、status；message 正文为纯文本且只能内联 <at user=\"ID\" />，sticker/sticker-update/sticker-delete 使用 id 属性，sticker-save 使用 ref/id 属性，note-add 关联使用 supplements/corrects 属性，routine 使用 start/end 属性，next-reply 使用 type/user_id 属性",
           }),
   })

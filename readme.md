@@ -108,8 +108,7 @@ Gemini 配置面向新模型，不再提供或发送 `temperature`、`topP`、`t
 Koishi 项目/
   data/yokai/
     characters/companion.yml   # 原格式的角色预设
-    characters/companion/
-      stickers/sleepy.webp     # 角色表情包，按 ID 命名，后缀由程序发现
+    stickers/<sha256>          # 角色收藏的表情包内容寻址存储
     media/<sha256>             # 入站图片内容寻址存储
     logs/<调用 ID>/
       input.json              # 模型输入与上下文
@@ -127,7 +126,7 @@ Koishi 项目/
 - 使用 `Session`、`Bot` 和 Koishi 过滤器处理消息及定时交付，没有自有平台连接或适配器注册体系。
 - 消息经 Koishi 中间件进入：自身消息、频道建档、`flag` 忽略和受理人（`assignee`）判断都由 Koishi 完成；匹配到指令的消息不触发角色扮演。
 - 频道就是 Koishi 的 `channel` 表：角色绑定和角色状态作为扩展字段 `yokaiPreset`、`yokaiState` 存在其中。群聊由 Koishi 中间件建档，私聊按 Koishi 的 `autoAssign` 规则补建；关闭 `autoAssign` 时未建档的频道不参与。定时与短期唤醒由频道受理人对应的机器人发送。
-- 通过 `ctx.model` 扩展 `channel`，并声明 `yokai_note`、`yokai_note_relation`、`yokai_schedule`、`yokai_schedule_run` 和 `yokai_history`；读写和事务全部交给 `ctx.database`。
+- 通过 `ctx.model` 扩展 `channel`，并声明 `yokai_sticker`、`yokai_note`、`yokai_note_relation`、`yokai_schedule`、`yokai_schedule_run` 和 `yokai_history`；读写和事务全部交给 `ctx.database`。
 - 模型请求通过 Effect 包裹注入的 `ctx.http`，沿用全局请求配置和代理钩子，支持总超时及取消。
 - 业务日志使用 Effect 日志入口，由当前插件的 Koishi logger 输出。
 - 消息监听、定时器和依赖关系由 Koishi 管理，Effect scope 管理进行中的业务任务与请求。
@@ -152,28 +151,22 @@ Koishi 项目/
 - 消息中的 `<image ... attached="true" ref="img_1" />` 表示画面已随请求附带；`attached="false"` 表示历史图片未附带，模型不会编造内容。
 - 图片以 data URL 或供应商原生内联块发送（DeepSeek/OpenAI 使用 base64 data URL，Gemini 使用 `inlineData`）；模型调用记录的 `input.json` 只保留 `sha256` 和大小，不写入图片正文。
 
-### 出站提及与表情包
+### 出站提及与角色表情包管理
 
-角色可以在 `<message>` 中内联 `<at user="实际参与者ID" />` 点名群友；私聊或引用当前上下文之外的参与者会被拒绝，整轮动作在发送前统一校验。角色表情包使用独立动作：
+角色可以在 `<message>` 中内联 `<at user="实际参与者ID" />` 点名群友；私聊或引用当前上下文之外的参与者会被拒绝，整轮动作在发送前统一校验。
+
+角色表情包按角色 ID 全局互通（上限 40 张），元数据保存在 `yokai_sticker` 表，图片二进制按 SHA-256 保存在 `data/yokai/stickers/`（与临时聊天媒体 `data/yokai/media/` 隔离）。上下文在用户消息的 `<stickers>` 中全量展示已有表情包及简介；历史或入站消息中若命中已知表情包哈希，直接回显为 `<sticker id="...">简介</sticker>`，不重复占用 4 张图片视觉窗口。
+
+在 `<actions>` 中支持发送与自主增删改表情包：
 
 ```xml
-<sticker id="sleepy" />
-<sticker id="无语" quote="实际消息ID" />
+<sticker-save ref="img_1" id="猫猫疑惑">白猫歪头满脸问号，用于表达疑惑或听不懂</sticker-save>
+<sticker-update id="猫猫疑惑">白猫歪头满脸问号，适合装傻或反问</sticker-update>
+<sticker-delete id="旧贴图ID" />
+<sticker id="猫猫疑惑" quote="实际消息ID" />
 ```
 
-### 角色表情包文件
-
-角色预设只声明 ID 与简介短语，路径与扩展名由程序维护：
-
-```yaml
-character:
-  # ...
-  stickers:
-    sleepy: 趴在被窝里困得睁不开眼
-    无语: 死鱼眼无语凝噎
-```
-
-对应文件放在 `data/yokai/characters/<角色目录>/stickers/`，文件名主干与 ID 相同，扩展名可为 `.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`；更换格式无需修改预设。目录缺失、同名多格式、文件超过 10 MiB 或内容格式无效会在启动时报错。未在预设中声明的图片不会进入提示词，也不能被发送。
+`sticker-save` 只能引用本轮实际附带画面的图片 `ref`，同角色禁止重名或重复收藏同一张图；支持同轮先删除旧表情包腾出容量再收藏新图，也支持收藏后同轮紧接着发送。
 
 ## 可逆生命周期
 

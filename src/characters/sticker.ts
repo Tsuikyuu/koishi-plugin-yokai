@@ -1,24 +1,38 @@
-import { Context, type Effect } from "effect"
-import type { CharacterId, StickerId } from "./character"
-import type { CharacterLoadError } from "./errors"
+import { Schema } from "effect"
+import type { CharacterId } from "./character"
 import type { ImageMimeType } from "../media/image"
 
-// 已解析的表情包文件；简介短语来自角色预设，由调用方按 id 组合。
-export interface StickerFile {
+// 表情包 ID 用于在 XML 属性与列表中唯一标识单张贴图，禁止空白与控制字符。
+export const StickerId = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[^\s\p{C}]+$/u),
+).pipe(Schema.brand("StickerId"))
+export type StickerId = typeof StickerId.Type
+
+// 单个角色可收藏的表情包数量上限，保证上下文可全量展示且无需额外检索轮次。
+export const MaxCharacterStickers = 40
+
+export interface Sticker {
   readonly id: StickerId
+  readonly characterId: CharacterId
+  readonly sha256: string
+  readonly mimeType: ImageMimeType
+  readonly byteLength: number
+  readonly summary: string
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+export interface StickerAsset extends Sticker {
+  readonly bytes: Uint8Array
+}
+
+export interface StickerInput {
+  readonly characterId: CharacterId
+  readonly id: StickerId
+  readonly summary: string
   readonly sha256: string
   readonly mimeType: ImageMimeType
   readonly bytes: Uint8Array
 }
-
-export class CharacterStickers extends Context.Service<
-  CharacterStickers,
-  {
-    // 启动校验：每个声明的 ID 必须对应唯一、可读且格式有效的图片文件。
-    readonly validate: (
-      characterId: CharacterId,
-      stickerIds: ReadonlyArray<StickerId>,
-    ) => Effect.Effect<void, CharacterLoadError>
-    readonly load: (characterId: CharacterId, stickerId: StickerId) => Effect.Effect<StickerFile, CharacterLoadError>
-  }
->()("yokai/characters/CharacterStickers") {}

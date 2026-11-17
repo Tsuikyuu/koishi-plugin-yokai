@@ -98,6 +98,7 @@ test("replaceable service protocols only import contract constructors at runtime
   // Representative public ports keep adapters out of the contracts they implement.
   for (const path of [
     "characters/catalog.ts",
+    "characters/sticker-store.ts",
     "channels/store.ts",
     "models/gateway.ts",
     "notebook/store.ts",

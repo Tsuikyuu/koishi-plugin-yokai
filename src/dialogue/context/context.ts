@@ -1,6 +1,7 @@
 import type { Channel } from "../../channels/channel"
 import type { CharacterPreset } from "../../characters/preset"
 import type { CharacterRoutine } from "../../characters/routine"
+import type { Sticker } from "../../characters/sticker"
 import type { ChannelTrigger } from "../trigger"
 import type { ModelInput } from "../../models/model"
 import type { Note } from "../../notebook/note"
@@ -10,6 +11,7 @@ import type { ImageAttachment } from "./attachments"
 export interface ChannelContextInput {
   readonly channel: Channel
   readonly preset: CharacterPreset
+  readonly stickers: ReadonlyArray<Sticker>
   readonly history: ChannelHistory
   readonly notes: ReadonlyArray<Note>
   readonly trigger: ChannelTrigger

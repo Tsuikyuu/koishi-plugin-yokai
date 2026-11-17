@@ -18,10 +18,11 @@ export interface ImageAttachment extends ImageCandidate {
   readonly bytes: Uint8Array
 }
 
-// 确定性窗口：本次触发消息、被引用消息，再由新到旧补齐历史尾部；同一内容只附带一次。
+// 确定性窗口：本次触发消息、被引用消息，再由新到旧补齐历史尾部；同一内容与已知角色贴图不重复附带。
 export const selectImages = (
   history: ChannelHistory,
   trigger: ChannelTrigger,
+  knownStickerHashes: ReadonlySet<string> = new Set(),
   limit: number = MaxAttachedImages,
 ): ReadonlyArray<ImageCandidate> => {
   const queue: Message[] = []
@@ -33,13 +34,14 @@ export const selectImages = (
   }
   queue.push(...[...history.messages].reverse())
 
-  const seen = new Set<string>()
+  const seen = new Set<string>(knownStickerHashes)
   const selected: ImageCandidate[] = []
   let bytes = 0
   for (const message of queue) {
     for (const [part, item] of message.parts.entries()) {
       if (selected.length === limit) return selected
       if (item.type !== "image" || !("sha256" in item)) continue
+      if (item.stickerId !== undefined) continue
       if (seen.has(item.sha256)) continue
       if (bytes + item.byteLength > MaxAttachedBytes) continue
       seen.add(item.sha256)
@@ -61,10 +63,11 @@ export const loadImageAttachments = (
   media: ChannelMediaStore["Service"],
   history: ChannelHistory,
   trigger: ChannelTrigger,
+  knownStickerHashes: ReadonlySet<string> = new Set(),
 ) =>
   Effect.gen(function* () {
     const attachments: ImageAttachment[] = []
-    for (const candidate of selectImages(history, trigger)) {
+    for (const candidate of selectImages(history, trigger, knownStickerHashes)) {
       const bytes = yield* media.read(candidate.sha256)
       if (bytes === undefined) continue
       attachments.push({ ...candidate, ref: `img_${attachments.length + 1}`, bytes })

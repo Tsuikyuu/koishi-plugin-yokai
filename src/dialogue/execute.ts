@@ -9,9 +9,11 @@ import { ChannelNotFound, ChannelStore } from "../channels/store"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutines } from "../characters/routines"
 import { CharacterRoutineError } from "../characters/routine"
-import { CharacterStickers } from "../characters/sticker"
+import { MaxCharacterStickers, type StickerId, type StickerInput } from "../characters/sticker"
+import { CharacterStickers } from "../characters/sticker-store"
 import { ChannelTriggers } from "./next-reply/triggers"
 import { executeRoutineAction } from "../characters/execute-routine-actions"
+import type { ImageMimeType } from "../media/image"
 import { ModelGateway } from "../models/gateway"
 import { NotebookStore } from "../notebook/store"
 import { Scheduler } from "../scheduling/scheduler"
@@ -35,9 +37,21 @@ const bound = (channels: ChannelStore["Service"], key: ChannelKey) =>
     ),
   )
 
+interface WorkingSticker {
+  readonly summary: string
+  readonly sha256: string
+  readonly pendingAsset?: {
+    readonly mimeType: ImageMimeType
+    readonly bytes: Uint8Array
+  }
+}
+
 type Execution =
   | { readonly type: "message"; readonly action: MessageAction }
   | { readonly type: "sticker"; readonly delivery: StickerDelivery }
+  | { readonly type: "sticker-save"; readonly input: StickerInput }
+  | { readonly type: "sticker-update"; readonly stickerId: StickerId; readonly summary: string }
+  | { readonly type: "sticker-delete"; readonly stickerId: StickerId }
   | { readonly type: "note-add"; readonly action: NoteAction }
   | { readonly type: "routine"; readonly action: RoutineAction }
 
@@ -63,7 +77,10 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
         )
         yield* triggers.clear(channel)
         const preset = yield* characters.get(channel.presetId)
-        yield* Effect.logDebug(`已加载角色预设 ${channel.presetId}（${preset.character.name}）`)
+        const currentStickers = yield* stickers.list(channel.presetId)
+        yield* Effect.logDebug(
+          `已加载角色预设 ${channel.presetId}（${preset.character.name}），当前表情包 ${currentStickers.length} 张`,
+        )
         const history = yield* platform.history(
           channel,
           trigger.type === "message"
@@ -73,9 +90,10 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
         yield* Effect.logDebug(
           `已读取历史 ${history.messages.length} 条，参与者 ${history.participants.length} 人`,
         )
-        // 主模型不支持图片时不读取媒体，所有图片在上下文中标记为 attached="false"。
+        const knownStickerHashes = new Set(currentStickers.map((item) => item.sha256))
+        // 主模型不支持图片时不读取媒体，所有未识别为已有表情包的图片在上下文中标记为 attached="false"。
         const attachments = model.capabilities.imageInput
-          ? yield* loadImageAttachments(media, history, trigger)
+          ? yield* loadImageAttachments(media, history, trigger, knownStickerHashes)
           : []
         const notes = yield* loadRecentNotes(channel.id).pipe(Effect.provideService(NotebookStore, notebook))
         yield* Effect.logDebug(`已加载近期笔记 ${notes.length} 条`)
@@ -86,6 +104,7 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
             buildChannelContext({
               channel,
               preset,
+              stickers: currentStickers,
               history,
               notes,
               trigger,
@@ -130,8 +149,12 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
         ])
         const participantIds = new Set(history.participants.map((participant) => participant.id))
         const noteIds = new Set(output.noteIds)
+        const attachmentsByRef = new Map(attachments.map((item) => [item.ref, item]))
+        const workingStickers = new Map<StickerId, WorkingSticker>(
+          currentStickers.map((item) => [item.id, { summary: item.summary, sha256: item.sha256 }]),
+        )
         const executions: Execution[] = []
-        // 先完整校验，再执行任何动作；失败不会发出半截消息。
+        // 先完整校验并按顺序推演工作集，再执行任何外部动作；失败不会发出半截消息。
         for (const action of response.actions) {
           if (action.type === "next-reply") continue
           if (action.type === "message") {
@@ -148,22 +171,78 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
             executions.push({ type: "message", action })
             continue
           }
+          if (action.type === "sticker-delete") {
+            if (!workingStickers.has(action.stickerId)) {
+              return yield* Effect.fail(new InvalidReply({ reason: `角色没有名为 ${action.stickerId} 的表情包` }))
+            }
+            workingStickers.delete(action.stickerId)
+            executions.push({ type: "sticker-delete", stickerId: action.stickerId })
+            continue
+          }
+          if (action.type === "sticker-save") {
+            const attachment = attachmentsByRef.get(action.ref)
+            if (attachment === undefined) {
+              return yield* Effect.fail(
+                new InvalidReply({ reason: `表情包收藏引用的图片 ${action.ref} 不在当前附带画面中` }),
+              )
+            }
+            if (workingStickers.has(action.stickerId)) {
+              return yield* Effect.fail(new InvalidReply({ reason: `表情包 ID ${action.stickerId} 已存在` }))
+            }
+            if ([...workingStickers.values()].some((item) => item.sha256 === attachment.sha256)) {
+              return yield* Effect.fail(new InvalidReply({ reason: "该图片已在角色表情包中" }))
+            }
+            if (workingStickers.size >= MaxCharacterStickers) {
+              return yield* Effect.fail(
+                new InvalidReply({ reason: `角色表情包数量已达上限 ${MaxCharacterStickers}` }),
+              )
+            }
+            workingStickers.set(action.stickerId, {
+              summary: action.summary,
+              sha256: attachment.sha256,
+              pendingAsset: { mimeType: attachment.mimeType, bytes: attachment.bytes },
+            })
+            executions.push({
+              type: "sticker-save",
+              input: {
+                characterId: channel.presetId,
+                id: action.stickerId,
+                summary: action.summary,
+                sha256: attachment.sha256,
+                mimeType: attachment.mimeType,
+                bytes: attachment.bytes,
+              },
+            })
+            continue
+          }
+          if (action.type === "sticker-update") {
+            const existing = workingStickers.get(action.stickerId)
+            if (existing === undefined) {
+              return yield* Effect.fail(new InvalidReply({ reason: `角色没有名为 ${action.stickerId} 的表情包` }))
+            }
+            workingStickers.set(action.stickerId, { ...existing, summary: action.summary })
+            executions.push({ type: "sticker-update", stickerId: action.stickerId, summary: action.summary })
+            continue
+          }
           if (action.type === "sticker") {
-            const summary = preset.character.stickers?.[action.stickerId]
-            if (summary === undefined) {
+            const current = workingStickers.get(action.stickerId)
+            if (current === undefined) {
               return yield* Effect.fail(new InvalidReply({ reason: `角色没有名为 ${action.stickerId} 的表情包` }))
             }
             if (action.quote !== undefined && !messageIds.has(action.quote)) {
               return yield* Effect.fail(new InvalidReply({ reason: "消息引用不在当前上下文中" }))
             }
-            const asset = yield* stickers.load(channel.presetId, action.stickerId)
+            const asset =
+              current.pendingAsset !== undefined
+                ? current.pendingAsset
+                : yield* stickers.load(channel.presetId, action.stickerId)
             executions.push({
               type: "sticker",
               delivery: {
                 type: "sticker",
                 stickerId: action.stickerId,
-                summary,
-                sha256: asset.sha256,
+                summary: current.summary,
+                sha256: current.sha256,
                 mimeType: asset.mimeType,
                 byteLength: asset.bytes.byteLength,
                 bytes: asset.bytes,
@@ -184,21 +263,38 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
         let completedActions = 0
         for (const execution of executions) {
           yield* Effect.logDebug(`执行动作 #${completedActions + 1} ${execution.type}`)
-          const actionEffect: Effect.Effect<void, ChannelExecutionError["cause"]> =
-            execution.type === "message"
-              ? platform.send(channel, execution.action)
-              : execution.type === "sticker"
-                ? platform.send(channel, execution.delivery)
-                : execution.type === "note-add"
-                  ? executeNoteAction(channel.id, execution.action).pipe(
-                      Effect.provideService(NotebookStore, notebook),
-                      Effect.asVoid,
+          let actionEffect: Effect.Effect<void, ChannelExecutionError["cause"]>
+          switch (execution.type) {
+            case "message":
+              actionEffect = platform.send(channel, execution.action)
+              break
+            case "sticker":
+              actionEffect = platform.send(channel, execution.delivery)
+              break
+            case "sticker-save":
+              actionEffect = stickers.save(execution.input).pipe(Effect.asVoid)
+              break
+            case "sticker-update":
+              actionEffect = stickers.update(channel.presetId, execution.stickerId, execution.summary).pipe(Effect.asVoid)
+              break
+            case "sticker-delete":
+              actionEffect = stickers.remove(channel.presetId, execution.stickerId)
+              break
+            case "note-add":
+              actionEffect = executeNoteAction(channel.id, execution.action).pipe(
+                Effect.provideService(NotebookStore, notebook),
+                Effect.asVoid,
+              )
+              break
+            case "routine":
+              actionEffect =
+                routines === undefined
+                  ? Effect.fail(new CharacterRoutineError({ reason: "日程功能未开启，无法执行 routine 动作" }))
+                  : executeRoutineAction(channel.presetId, execution.action).pipe(
+                      Effect.provideService(CharacterRoutines, routines),
                     )
-                  : routines === undefined
-                    ? Effect.fail(new CharacterRoutineError({ reason: "日程功能未开启，无法执行 routine 动作" }))
-                    : executeRoutineAction(channel.presetId, execution.action).pipe(
-                        Effect.provideService(CharacterRoutines, routines),
-                      )
+              break
+          }
           yield* actionEffect.pipe(
             Effect.mapError((cause) => new ChannelExecutionError({ stage: "actions", completedActions, cause })),
           )

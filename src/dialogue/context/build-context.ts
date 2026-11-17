@@ -1,13 +1,16 @@
 import { Redacted } from "effect"
 import type { ChannelContextBuilder } from "./context"
-import { element, escapeXml, localTime, messageXml } from "./xml"
-import { characterContext, hasStickers, stickerContext } from "../../characters/prompt"
+import { element, escapeXml, localTime, messageXml, type KnownStickerView } from "./xml"
+import { characterContext } from "../../characters/prompt"
+import { MaxCharacterStickers } from "../../characters/sticker"
 import { routineContext } from "./routine-context"
 import { channelOutputProtocol } from "../response/protocol"
+import type { ModelUserContent, ModelUserPart } from "../../models/model"
 
 export const buildChannelContext: ChannelContextBuilder = ({
   channel,
   preset,
+  stickers,
   history,
   notes,
   trigger,
@@ -25,16 +28,20 @@ export const buildChannelContext: ChannelContextBuilder = ({
         ? `<trigger reason="wake-up" scheduleid="${escapeXml(trigger.run.scheduleId)}" scheduled_at="${trigger.run.scheduledAt.getTime()}">${escapeXml(trigger.text)}</trigger>`
         : `<trigger reason="next-reply" time="${trigger.time}">${escapeXml(trigger.reason)}</trigger>`
   const refs = new Map(attachments.map((attachment) => [`${attachment.messageId}:${attachment.part}`, attachment.ref]))
+  const knownStickers = new Map<string, KnownStickerView>(
+    stickers.map((sticker) => [sticker.sha256, { id: sticker.id, summary: sticker.summary }]),
+  )
   const known = new Map(
     [...history.messages, ...(trigger.type === "message" ? [trigger.message] : [])].map((message) => [
       message.id,
       message,
     ]),
   )
+  const stickerLines = stickers.map((sticker) => `<sticker id="${escapeXml(sticker.id)}">${escapeXml(sticker.summary)}</sticker>`)
   const user = [
     "# 当前环境",
     `<environment>${element("channel_id", channel.channelId)}${element("platform", channel.platform)}` +
-      `${element("bot_id", history.bot.id)}${element("direct", String(history.direct))}<time>${time}</time>${element("timezone", timezone)}` +
+      `${element("bot_id", history.bot.id)}${element("direct", `${history.direct}`)}<time>${time}</time>${element("timezone", timezone)}` +
       `${element("local_time", localTime(time, timezone))}${triggerXml}</environment>`,
     "# 参与者",
     `<participants>${history.participants
@@ -57,10 +64,14 @@ export const buildChannelContext: ChannelContextBuilder = ({
           `</note>`,
       )
       .join("\n")}</notebook>`,
+    "# 角色表情包",
+    `<stickers count="${stickers.length}" limit="${MaxCharacterStickers}">${
+      stickerLines.length === 0 ? "" : `\n${stickerLines.join("\n")}\n`
+    }</stickers>`,
     "# 平台历史",
-    `<history>${history.messages.map((message) => messageXml(message, refs)).join("\n")}</history>`,
+    `<history>${history.messages.map((message) => messageXml(message, refs, knownStickers)).join("\n")}</history>`,
     ...(trigger.type === "message"
-      ? ["# 本次触发消息", `<incoming>${messageXml(trigger.message, refs)}</incoming>`]
+      ? ["# 本次触发消息", `<incoming>${messageXml(trigger.message, refs, knownStickers)}</incoming>`]
       : trigger.type === "schedule"
         ? ["# 本次定时触发", "你安排的事情到时间了，具体内容见 trigger。请结合当前情境决定是否发言。"]
         : ["# 本次短期唤醒", "你之前设置的短期条件已满足，具体内容见 trigger。请结合当前情境决定是否发言。"]),
@@ -77,26 +88,21 @@ export const buildChannelContext: ChannelContextBuilder = ({
     "  2. 你的输出是否符合**所有的要求、设定**？如果不符合，需要修正",
     "  完成后，才能输出正式的结果",
   ].join("\n")
-  const stickerEnabled = hasStickers(preset)
-  const content =
-    attachments.length === 0
-      ? user
-      : [
-          { type: "text" as const, text: user },
-          ...attachments.flatMap((attachment) => [
-            {
-              type: "text" as const,
-              text: `<attachment ref="${escapeXml(attachment.ref)}" message_id="${escapeXml(attachment.messageId)}" sender="${escapeXml(known.get(attachment.messageId)?.sender ?? "")}" />`,
-            },
-            {
-              type: "image" as const,
-              sha256: attachment.sha256,
-              mimeType: attachment.mimeType,
-              byteLength: attachment.byteLength,
-              data: Redacted.make(Buffer.from(attachment.bytes).toString("base64")),
-            },
-          ]),
-        ]
+  const attachmentParts: ReadonlyArray<ModelUserPart> = attachments.flatMap((attachment): ReadonlyArray<ModelUserPart> => [
+    {
+      type: "text",
+      text: `<attachment ref="${escapeXml(attachment.ref)}" message_id="${escapeXml(attachment.messageId)}" sender="${escapeXml(known.get(attachment.messageId)?.sender ?? "")}" />`,
+    },
+    {
+      type: "image",
+      sha256: attachment.sha256,
+      mimeType: attachment.mimeType,
+      byteLength: attachment.byteLength,
+      data: Redacted.make(Buffer.from(attachment.bytes).toString("base64")),
+    },
+  ])
+  const content: ModelUserContent =
+    attachments.length === 0 ? user : [{ type: "text", text: user }, ...attachmentParts]
   return {
     messages: [
       {
@@ -113,9 +119,8 @@ export const buildChannelContext: ChannelContextBuilder = ({
           "trigger reason 为 wake-up 或 next-reply 时，这是你主动发起的回合；不要伪造用户消息，结合当前情境决定是否发言。",
           `回应对方此刻表达的意思和情绪，只提及与话题有关的生活细节${routine === undefined ? "。" : "，不为了说明作息而补充起止时间、前后活动或解释整条时间线。"}`,
           "按角色性格决定说多少，不必每次都把事情解释完整。",
-          channelOutputProtocol(routine !== undefined, stickerEnabled),
+          channelOutputProtocol(routine !== undefined),
           characterContext(preset),
-          ...(stickerEnabled ? [stickerContext(preset)] : []),
         ].join("\n"),
       },
       { role: "user", content },

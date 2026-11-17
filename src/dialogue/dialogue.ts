@@ -3,6 +3,7 @@ import type { ChannelKey } from "../channels/channel"
 import type { CharacterId } from "../characters/character"
 import type { CharacterLoadError, CharacterNotFound } from "../characters/errors"
 import type { CharacterRoutineError } from "../characters/routine"
+import type { StickerConflict, StickerNotFound, StickerStoreError } from "../characters/sticker-store"
 import type { InvalidReply } from "./invalid-reply"
 import type { InvalidSchedule, ScheduleTask } from "../scheduling/schedule"
 import type { Message } from "../channels/message"
@@ -22,6 +23,9 @@ export class ChannelExecutionError extends Data.TaggedError("ChannelExecutionErr
     | ChannelPlatformError
     | NotebookStoreError
     | NoteNotFound
+    | StickerStoreError
+    | StickerNotFound
+    | StickerConflict
     | ChannelStoreError
     | ChannelNotFound
     | CharacterRoutineError
@@ -32,6 +36,9 @@ export type ChannelReplyError =
   | CharacterNotFound
   | CharacterRoutineError
   | CharacterLoadError
+  | StickerStoreError
+  | StickerNotFound
+  | StickerConflict
   | ChannelStoreError
   | NotebookStoreError
   | NoteNotFound

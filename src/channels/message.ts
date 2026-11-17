@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { ImageMimeType } from "../media/image"
-import { StickerId } from "../characters/character"
+import { StickerId } from "../characters/sticker"
 
 export const ParticipantId = Schema.String.check(Schema.isNonEmpty()).pipe(Schema.brand("ParticipantId"))
 export type ParticipantId = typeof ParticipantId.Type

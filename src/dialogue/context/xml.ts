@@ -1,5 +1,10 @@
 import type { Message } from "../../channels/message"
 
+export interface KnownStickerView {
+  readonly id: string
+  readonly summary: string
+}
+
 export const escapeXml = (text: string): string =>
   text.replace(
     /[&<>"']/g,
@@ -14,8 +19,12 @@ export const escapeXml = (text: string): string =>
   )
 export const element = (tag: string, text: string) => `<${tag}>${escapeXml(text)}</${tag}>`
 
-// refs 的键为 `${messageId}:${partIndex}`；只有本轮实际附带画面的图片带 ref。
-export const messageXml = (message: Message, refs: ReadonlyMap<string, string> = new Map()) => {
+// refs 的键为 `${messageId}:${partIndex}`；只有本轮实际附带画面的图片带 ref，已知角色表情包直接回显语义。
+export const messageXml = (
+  message: Message,
+  refs: ReadonlyMap<string, string> = new Map(),
+  knownStickers: ReadonlyMap<string, KnownStickerView> = new Map(),
+) => {
   const content = message.parts
     .map((part, index) => {
       if (part.type === "text") return `<text>${escapeXml(part.text)}</text>`
@@ -25,6 +34,10 @@ export const messageXml = (message: Message, refs: ReadonlyMap<string, string> =
       const summary = "summary" in part ? part.summary : undefined
       if (stickerId !== undefined)
         return `<sticker id="${escapeXml(stickerId)}">${summary === undefined ? "" : escapeXml(summary)}</sticker>`
+      if ("sha256" in part) {
+        const matched = knownStickers.get(part.sha256)
+        if (matched !== undefined) return `<sticker id="${escapeXml(matched.id)}">${escapeXml(matched.summary)}</sticker>`
+      }
       const ref = refs.get(`${message.id}:${index}`)
       return `<image kind="${part.kind}"${ref === undefined ? ' attached="false"' : ` attached="true" ref="${escapeXml(ref)}"`} />`
     })

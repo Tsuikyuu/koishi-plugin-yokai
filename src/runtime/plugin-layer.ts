@@ -1,7 +1,6 @@
 import { join } from "node:path"
 import {
   Cause,
-  Context as Services,
   Effect,
   Exit,
   Fiber,
@@ -23,9 +22,7 @@ import { makeChannelLock } from "../channels/lock"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutinesLive } from "../characters/generated-routines"
 import { CharacterRoutines } from "../characters/routines"
-import { CharacterStickers } from "../characters/sticker"
-import { characterStickersFile } from "../characters/file-stickers"
-import { StickerId } from "../characters/character"
+import { stickerStoreLayer } from "../characters/koishi-sticker-store"
 import { ChannelTriggers } from "../dialogue/next-reply/triggers"
 import { ChannelTriggersLive } from "../dialogue/next-reply/track-triggers"
 import { ModelGatewayRecorded } from "../models/records/recorded-gateway"
@@ -54,8 +51,9 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       const config = yield* resolveConfig(raw, ctx.baseDir)
       const databaseGate = yield* Semaphore.make(1)
       const base = yield* Layer.build(
-        Layer.merge(
+        Layer.mergeAll(
           databaseLayer(ctx.database, databaseGate.withPermit),
+          stickerStoreLayer(ctx.database, databaseGate.withPermit, join(config.dataDirectory, "stickers")),
           ModelTraceStoreFile(join(config.dataDirectory, "logs")),
         ),
       )
@@ -79,7 +77,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
               : ModelGatewayOpenAI(selected, capabilities)
         return ModelGatewayRecorded(selected.model).pipe(Layer.provide(gateway.pipe(Layer.provide(http))))
       })
-      const channels = Services.get(base, ChannelStore)
+      const channels = yield* ChannelStore.pipe(Effect.provideContext(base))
       const presets = yield* Effect.gen(function* () {
         const characters = yield* CharacterCatalog
         const ids = yield* channels.listPresetIds()
@@ -88,27 +86,18 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           characters.get,
         )
       }).pipe(Effect.provide(catalog()))
-      // 表情包与媒体目录由程序维护；启动时校验声明的 ID 都有唯一且有效的图片文件。
-      const stickerFiles = characterStickersFile(config.directory)
-      yield* Effect.forEach(
-        presets,
-        (preset) =>
-          stickerFiles.validate(
-            preset.character.id,
-            Object.keys(preset.character.stickers ?? {}).map((id) => Schema.decodeSync(StickerId)(id)),
-          ),
-        { discard: true },
-      )
       const media = channelMediaStoreFile(ctx.http, join(config.dataDirectory, "media"), ctx.baseDir)
       const routines = config.routineEnabled
-        ? Services.get(
-            yield* Layer.build(
-              CharacterRoutinesLive(presets, config.timezone).pipe(Layer.provide(yield* modelLayer)),
-            ).pipe(Effect.provideContext(base)),
-            CharacterRoutines,
+        ? yield* CharacterRoutines.pipe(
+            Effect.provideContext(
+              yield* Layer.build(
+                CharacterRoutinesLive(presets, config.timezone).pipe(Layer.provide(yield* modelLayer)),
+              ).pipe(Effect.provideContext(base)),
+            ),
           )
         : undefined
       const triggers = yield* Layer.build(ChannelTriggersLive)
+      const triggerService = yield* ChannelTriggers.pipe(Effect.provideContext(triggers))
       const history = yield* createKoishiHistory(ctx, databaseGate.withPermit, media)
       const withChannel = yield* makeChannelLock
 
@@ -126,7 +115,6 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
                 catalog(),
                 history.channelPlatform(session),
                 Layer.succeed(ChannelMediaStore, media),
-                Layer.succeed(CharacterStickers, stickerFiles),
               ),
             ),
           )
@@ -193,7 +181,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         for (const { exit } of results) if (Exit.isFailure(exit)) yield* report(exit.cause)
       })
       const proactiveTick = Effect.gen(function* () {
-        const pending = yield* Services.get(triggers, ChannelTriggers).due(Date.now())
+        const pending = yield* triggerService.due(Date.now())
         yield* Effect.forEach(
           pending,
           (trigger) =>

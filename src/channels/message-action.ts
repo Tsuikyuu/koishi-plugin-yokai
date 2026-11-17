@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { MessageId, ParticipantId } from "./message"
-import { StickerId } from "../characters/character"
+import { StickerId } from "../characters/sticker"
 import type { ImageMimeType } from "../media/image"
 
 export const TextSegment = Schema.Struct({
