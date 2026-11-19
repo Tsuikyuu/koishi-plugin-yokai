@@ -9,6 +9,7 @@ import { MessageAction } from "../src/channels/message-action"
 import { ChannelPlatform } from "../src/channels/messaging"
 import { createKoishiHistory, encodeAction } from "../src/channels/koishi-history"
 import { registerHistoryModel } from "../src/channels/register-history"
+import { registerChannelModel } from "../src/channels/register-table"
 
 interface Sent {
   readonly channelId: string
@@ -50,6 +51,7 @@ const addBot = (ctx: Context, id: string, sent: Sent[], disposers: Array<() => v
 const fixture = async () => {
   const app = new Context()
   app.plugin(sqlite, { path: ":memory:" })
+  registerChannelModel(app)
   registerHistoryModel(app)
   const sent: Sent[] = []
   const disposers: Array<() => void> = []
@@ -321,4 +323,183 @@ test("model text stays plain text while an explicit quote remains a native quote
   )
   assert.equal(elements[0]?.attrs.id, quoted.quote)
   assert.equal(elements[1]?.toString(true), (quoted.parts[0] as { text: string }).text)
+})
+
+test("empty channel backfills recent platform history once before recording the first incoming message", async () => {
+  const f = await fixture()
+  try {
+    let listCalls = 0
+    f.bot.getMessageList = async (channelId) => {
+      listCalls++
+      assert.equal(channelId, "room")
+      return {
+        data: [
+          {
+            id: "old-human",
+            content: "大家早",
+            timestamp: 900,
+            user: { id: "alice", name: "Alice" },
+            channel: { id: "room", type: Universal.Channel.Type.TEXT },
+            guild: { id: "guild" },
+          },
+          {
+            id: "old-bot",
+            content: "早呀",
+            timestamp: 950,
+            user: { id: "bot", name: "Yokai" },
+            channel: { id: "room", type: Universal.Channel.Type.TEXT },
+            guild: { id: "guild" },
+          },
+          {
+            id: "m1",
+            content: "Message m1",
+            timestamp: 1001,
+            user: { id: "human", name: "Human" },
+            channel: { id: "room", type: Universal.Channel.Type.TEXT },
+            guild: { id: "guild" },
+          },
+        ],
+      }
+    }
+    const triggerSession = f.incoming("m1")
+    if (triggerSession.event.message) {
+      triggerSession.event.message.quote = { id: "old-bot" }
+    }
+    const first = await Effect.runPromise(f.history.recordIncoming(triggerSession))
+    assert.ok(first)
+    assert.equal(first.quotedBot, true)
+    assert.equal(listCalls, 1)
+
+    const second = await Effect.runPromise(f.history.recordIncoming(f.incoming("m2")))
+    assert.ok(second)
+    assert.equal(listCalls, 1)
+
+    const view = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* ChannelPlatform).history(channelFor(first.key), {
+          beforeMessageId: first.incoming.id,
+          limit: 50,
+        })
+      }).pipe(Effect.provide(f.history.channelPlatform(triggerSession))),
+    )
+    assert.deepEqual(
+      view.messages.map((message) => message.id),
+      ["old-human", "old-bot"],
+    )
+    const rows = await f.app.database.get("yokai_history", {}, { sort: { id: "asc" } })
+    assert.deepEqual(
+      rows.map((row) => [row.messageId, row.direction]),
+      [
+        ["old-human", "incoming"],
+        ["old-bot", "outgoing"],
+        ["m1", "incoming"],
+        ["m2", "incoming"],
+      ],
+    )
+  } finally {
+    await f.close()
+  }
+})
+
+test("syncBot and invalidateBot backfill only missed messages across offline gaps without reordering older history", async () => {
+  const f = await fixture()
+  try {
+    await f.app.database.createChannel("test-platform", "room", {
+      assignee: "bot",
+      guildId: "guild",
+      yokaiPreset: "companion",
+    })
+    await f.app.database.create("yokai_history", {
+      platform: "test-platform",
+      channelId: "room",
+      direct: false,
+      guildId: "guild",
+      userId: "human",
+      referrer: null,
+      direction: "incoming",
+      messageId: "m2",
+      senderId: "human",
+      senderName: "Human",
+      time: new Date(2000),
+      text: "已有消息 m2",
+      parts: [{ type: "text", text: "已有消息 m2" }],
+      quote: null,
+    })
+
+    // 模拟适配器逆序返回，同时包含比数据库已有记录更早的 m1 与离线新增的 m3、m4
+    let remoteMessages: Universal.Message[] = [
+      { id: "m4", content: "离线消息 4", timestamp: 4000, user: { id: "bob", name: "Bob" } },
+      { id: "m3", content: "离线消息 3", timestamp: 3000, user: { id: "alice", name: "Alice" } },
+      { id: "m2", content: "已有消息 m2", timestamp: 2000, user: { id: "human", name: "Human" } },
+      { id: "m1", content: "更早消息 m1", timestamp: 1000, user: { id: "human", name: "Human" } },
+    ]
+    f.bot.getMessageList = async () => ({ data: remoteMessages })
+
+    await Effect.runPromise(f.history.syncBot(f.bot))
+    const afterFirstSync = await f.app.database.get("yokai_history", {}, { sort: { id: "asc" } })
+    assert.deepEqual(
+      afterFirstSync.map((row) => row.messageId),
+      ["m2", "m3", "m4"],
+    )
+
+    // 机器人断线重连后再次产生离线消息 m5
+    await Effect.runPromise(f.history.invalidateBot(f.bot))
+    remoteMessages = [
+      { id: "m5", content: "重连前消息 5", timestamp: 5000, user: { id: "bob", name: "Bob" } },
+      ...remoteMessages,
+    ]
+    await Effect.runPromise(f.history.syncBot(f.bot))
+    const afterReconnectSync = await f.app.database.get("yokai_history", {}, { sort: { id: "asc" } })
+    assert.deepEqual(
+      afterReconnectSync.map((row) => row.messageId),
+      ["m2", "m3", "m4", "m5"],
+    )
+  } finally {
+    await f.close()
+  }
+})
+
+test("realtime incoming message arriving while syncBot is fetching is not swallowed", async () => {
+  const f = await fixture()
+  try {
+    await f.app.database.createChannel("test-platform", "room", {
+      assignee: "bot",
+      guildId: "guild",
+      yokaiPreset: "companion",
+    })
+    let releaseFetch: (() => void) | undefined
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve
+    })
+    let notifyEntered: (() => void) | undefined
+    const entered = new Promise<void>((resolve) => {
+      notifyEntered = resolve
+    })
+    f.bot.getMessageList = async () => {
+      notifyEntered?.()
+      await fetchGate
+      return {
+        data: [
+          { id: "m-offline", content: "离线消息", timestamp: 1000, user: { id: "alice", name: "Alice" } },
+          { id: "m9", content: "Message m9", timestamp: 1009, user: { id: "human", name: "Human" } },
+        ],
+      }
+    }
+
+    const syncing = Effect.runPromise(f.history.syncBot(f.bot))
+    await entered
+    const receiving = Effect.runPromise(f.history.recordIncoming(f.incoming("m9")))
+    releaseFetch?.()
+    const [, recorded] = await Promise.all([syncing, receiving])
+    assert.ok(recorded)
+    assert.equal(recorded.incoming.id, "m9")
+
+    const rows = await f.app.database.get("yokai_history", {}, { sort: { id: "asc" } })
+    assert.deepEqual(
+      rows.map((row) => row.messageId),
+      ["m-offline", "m9"],
+    )
+  } finally {
+    await f.close()
+  }
 })

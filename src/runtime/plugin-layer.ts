@@ -10,7 +10,7 @@ import {
   Schema,
   Semaphore,
 } from "effect"
-import type { Context, Session } from "koishi"
+import { Universal, type Context, type Session } from "koishi"
 import type { Config } from "../config/schema"
 import { resolveConfig, resolveModel } from "../config/resolve"
 import { ChannelRoleplay, type ChannelReplyError } from "../dialogue/dialogue"
@@ -230,6 +230,31 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         ),
         (dispose) => Effect.sync(dispose),
       )
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          ctx.on("bot-status-updated", (bot) => {
+            if (bot.status === Universal.Status.ONLINE) {
+              run(history.syncBot(bot).pipe(Effect.catchCause(report)))
+            } else {
+              run(history.invalidateBot(bot).pipe(Effect.catchCause(report)))
+            }
+          }),
+        ),
+        (dispose) => Effect.sync(dispose),
+      )
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          ctx.on("bot-removed", (bot) => {
+            run(history.invalidateBot(bot).pipe(Effect.catchCause(report)))
+          }),
+        ),
+        (dispose) => Effect.sync(dispose),
+      )
+      for (const bot of ctx.bots) {
+        if (bot.status === Universal.Status.ONLINE) {
+          yield* Effect.sync(() => run(history.syncBot(bot).pipe(Effect.catchCause(report))))
+        }
+      }
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           ctx.setInterval(() => {
