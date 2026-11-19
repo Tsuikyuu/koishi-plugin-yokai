@@ -661,6 +661,31 @@ test(
     await send({ id: "m-direct", content: "私聊不看群门控", direct: true })
     assert.equal(f.calls.length, 7)
 
+    // 校验提示词中已包含 next-reply 使用时机说明且不含旧版误导描述
+    const groupCallText = f.calls[0]?.body.messages.map((item) => item.content).join("\n") ?? ""
+    assert.match(groupCallText, /普通闲聊默认不会唤醒你/)
+    assert.doesNotMatch(groupCallText, /每条消息都会生成回合/)
+
+    // 校验 next-reply 拒绝填写机器人自身或不在上下文中的无效 user_id（整轮不发出前序消息）
+    const sentBeforeInvalid = f.sent.length
+    f.handleReplies((call) =>
+      complete(
+        call,
+        '<response><think/><actions><message>这句不该发出</message><next-reply type="message_from_user" user_id="bot" /></actions><status/></response>',
+      ),
+    )
+    await send({ id: "m-invalid-bot-target", content: "测试填机器人自己ID", direct: true })
+    assert.equal(f.sent.length, sentBeforeInvalid)
+
+    f.handleReplies((call) =>
+      complete(
+        call,
+        '<response><think/><actions><message>这句也不该发出</message><next-reply type="message_from_user" user_id="Human" /></actions><status/></response>',
+      ),
+    )
+    await send({ id: "m-invalid-nickname-target", content: "测试填昵称而非ID", direct: true })
+    assert.equal(f.sent.length, sentBeforeInvalid)
+
     fork.dispose()
     await f.ctx.lifecycle.flush()
   },

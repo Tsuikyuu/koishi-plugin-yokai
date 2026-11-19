@@ -169,7 +169,7 @@ export const ChannelRoleplayLive = (
           ...history.messages.map((message) => message.id),
           ...(trigger.type === "message" ? trigger.messages.map((message) => message.id) : []),
         ])
-        const participantIds = new Set(history.participants.map((participant) => participant.id))
+        const participantIds = new Set<string>(history.participants.map((participant) => participant.id))
         const noteIds = new Set(output.noteIds)
         const attachmentsByRef = new Map(attachments.map((item) => [item.ref, item]))
         const workingStickers = new Map<StickerId, WorkingSticker>(
@@ -178,7 +178,12 @@ export const ChannelRoleplayLive = (
         const executions: Execution[] = []
         // 先完整校验并按顺序推演工作集，再执行任何外部动作；失败不会发出半截消息。
         for (const action of response.actions) {
-          if (action.type === "next-reply") continue
+          if (action.type === "next-reply") {
+            if (action.userId !== "all" && (action.userId === history.bot.id || !participantIds.has(action.userId))) {
+              return yield* Effect.fail(new InvalidReply({ reason: "短期唤醒目标用户不在当前上下文中" }))
+            }
+            continue
+          }
           if (action.type === "message") {
             for (const part of action.parts) {
               if (part.type !== "at") continue
