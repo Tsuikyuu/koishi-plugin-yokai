@@ -23,6 +23,7 @@ interface MessageBatch<Ctx> {
 type InstantJob<ScheduleError> =
   | {
       readonly type: "proactive"
+      readonly source: "next-reply" | "ambient"
       readonly trigger: ProactiveTrigger
       readonly done: Deferred.Deferred<void>
     }
@@ -244,10 +245,12 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
           }
           if (step.kind === "proactive") {
             const tryEnterCommit = makeTryEnterCommit(channelId, step.cancel)
+            const runTurn =
+              step.job.source === "ambient"
+                ? runner.runAmbient(step.job.trigger, tryEnterCommit)
+                : runner.runProactive(step.job.trigger, tryEnterCommit)
             const raced = yield* Effect.raceFirst(
-              Effect.exit(runner.runProactive(step.job.trigger, tryEnterCommit)).pipe(
-                Effect.map((exit): RacedTurnOutcome => ({ kind: "completed", exit })),
-              ),
+              Effect.exit(runTurn).pipe(Effect.map((exit): RacedTurnOutcome => ({ kind: "completed", exit }))),
               Deferred.await(step.cancel).pipe(Effect.map((): RacedTurnOutcome => ({ kind: "preempted" }))),
             )
             const preempted = yield* finishInterruptibleTurn(channelId, step.cancel)
@@ -288,6 +291,39 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
           }),
         ),
       )
+
+    const submitInterruptible = (source: "next-reply" | "ambient", trigger: ProactiveTrigger): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const channelId = channelIdOf(trigger.channel)
+        const decision = yield* Ref.modify(
+          states,
+          (
+            all,
+          ): readonly [
+            { readonly startWorker: boolean; readonly wait: Deferred.Deferred<void> | undefined },
+            ReadonlyMap<ChannelId, ChannelEntry<Ctx, ScheduleError>>,
+          ] => {
+            // 主动唤醒与旁听探头无需防抖；若频道已有待处理或执行中的回合，直接跳过
+            if (all.has(channelId)) {
+              return [{ startWorker: false, wait: undefined }, all]
+            }
+            const done = Deferred.makeUnsafe<void>()
+            const created: ChannelEntry<Ctx, ScheduleError> = {
+              pendingBatch: undefined,
+              instantQueue: [{ type: "proactive", source, trigger, done }],
+              active: undefined,
+              wakeDebounce: undefined,
+            }
+            return [{ startWorker: true, wait: done }, new Map(all).set(channelId, created)]
+          },
+        )
+        if (decision.startWorker) {
+          yield* spawn(worker(channelId))
+        }
+        if (decision.wait !== undefined) {
+          yield* Deferred.await(decision.wait)
+        }
+      })
 
     return {
       submitMessage: (input) =>
@@ -412,37 +448,9 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
           }
         }),
 
-      submitProactive: (trigger) =>
-        Effect.gen(function* () {
-          const channelId = channelIdOf(trigger.channel)
-          const decision = yield* Ref.modify(
-            states,
-            (
-              all,
-            ): readonly [
-              { readonly startWorker: boolean; readonly wait: Deferred.Deferred<void> | undefined },
-              ReadonlyMap<ChannelId, ChannelEntry<Ctx, ScheduleError>>,
-            ] => {
-            // 主动唤醒无需防抖；若频道已有待处理或执行中的回合，直接跳过过时的沉默触发
-            if (all.has(channelId)) {
-              return [{ startWorker: false, wait: undefined }, all]
-            }
-            const done = Deferred.makeUnsafe<void>()
-            const created: ChannelEntry<Ctx, ScheduleError> = {
-              pendingBatch: undefined,
-              instantQueue: [{ type: "proactive", trigger, done }],
-              active: undefined,
-              wakeDebounce: undefined,
-            }
-            return [{ startWorker: true, wait: done }, new Map(all).set(channelId, created)]
-          })
-          if (decision.startWorker) {
-            yield* spawn(worker(channelId))
-          }
-          if (decision.wait !== undefined) {
-            yield* Deferred.await(decision.wait)
-          }
-        }),
+      submitProactive: (trigger) => submitInterruptible("next-reply", trigger),
+
+      submitAmbient: (trigger) => submitInterruptible("ambient", trigger),
 
       submitScheduled: (key, task) =>
         Effect.gen(function* () {

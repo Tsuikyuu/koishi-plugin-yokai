@@ -37,6 +37,10 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       debounceMs: 2000,
       maxDebounceMs: 8000,
     })
+    assert.deepEqual(resolved.ambient, {
+      enabled: true,
+      cooldownSeconds: 180,
+    })
     const customized = await Effect.runPromise(
       resolveConfig(
         Config({
@@ -49,6 +53,8 @@ test("Koishi config keeps file references and resolves files only beneath data/y
             triggerOnNamePrefix: true,
             debounceMs: 1500,
             maxDebounceMs: 6000,
+            proactiveEnabled: false,
+            proactiveCooldownSeconds: 60,
           },
         }),
         root,
@@ -64,6 +70,18 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       debounceMs: 1500,
       maxDebounceMs: 6000,
     })
+    assert.deepEqual(customized.ambient, {
+      enabled: false,
+      cooldownSeconds: 60,
+    })
+    assert.equal(
+      (
+        await Effect.runPromiseExit(
+          resolveConfig({ ...config, roleplay: { character: "companion", proactiveCooldownSeconds: -1 } }, root),
+        )
+      )._tag,
+      "Failure",
+    )
     assert.equal(
       (
         await Effect.runPromiseExit(

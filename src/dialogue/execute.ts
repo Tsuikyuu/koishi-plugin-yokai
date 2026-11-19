@@ -155,7 +155,7 @@ export const ChannelRoleplayLive = (
         )
         if (output === undefined) {
           yield* Effect.logDebug("本轮思考已被后续新消息抢占，放弃继续生成")
-          return { actionsExecuted: 0 }
+          return { actionsExecuted: 0, spoke: false }
         }
         yield* Effect.logDebug(`模型最终输出：\n${output.text}`)
         const response = yield* parseChannelResponse(output.text).pipe(
@@ -291,19 +291,22 @@ export const ChannelRoleplayLive = (
           const allowed = yield* options.tryEnterCommit
           if (!allowed) {
             yield* Effect.logDebug("本轮思考已被后续新消息抢占，放弃提交")
-            return { actionsExecuted: 0 }
+            return { actionsExecuted: 0, spoke: false }
           }
         }
         yield* triggers.clear(channel)
         let completedActions = 0
+        let spoke = false
         for (const execution of executions) {
           yield* Effect.logDebug(`执行动作 #${completedActions + 1} ${execution.type}`)
           let actionEffect: Effect.Effect<void, ChannelExecutionError["cause"]>
           switch (execution.type) {
             case "message":
+              spoke = true
               actionEffect = platform.send(channel, execution.action)
               break
             case "sticker":
+              spoke = true
               actionEffect = platform.send(channel, execution.delivery)
               break
             case "sticker-save":
@@ -345,7 +348,7 @@ export const ChannelRoleplayLive = (
           yield* triggers.register(channel, nextReplies, (yield* DateTime.nowAsDate).getTime())
           yield* Effect.logDebug(`已登记短期唤醒条件 ${nextReplies.length} 个`)
         }
-        return { actionsExecuted: completedActions }
+        return { actionsExecuted: completedActions, spoke }
       })
 
       return ChannelRoleplay.of({
@@ -380,7 +383,7 @@ export const ChannelRoleplayLive = (
                 )
               ) {
                 yield* Effect.logDebug("群聊消息未命中触发条件，跳过本轮")
-                return { actionsExecuted: 0 }
+                return { actionsExecuted: 0, spoke: false }
               }
             }
             return yield* execute(
@@ -427,6 +430,15 @@ export const ChannelRoleplayLive = (
             return yield* execute(
               channel,
               { type: "next-reply", reason: trigger.reason, time: trigger.time },
+              options?.tryEnterCommit === undefined ? undefined : { tryEnterCommit: options.tryEnterCommit },
+            )
+          }),
+        ambient: (trigger, options) =>
+          Effect.gen(function* () {
+            const channel = yield* bound(channels, trigger.channel)
+            return yield* execute(
+              channel,
+              { type: "ambient", reason: trigger.reason, time: trigger.time },
               options?.tryEnterCommit === undefined ? undefined : { tryEnterCommit: options.tryEnterCommit },
             )
           }),

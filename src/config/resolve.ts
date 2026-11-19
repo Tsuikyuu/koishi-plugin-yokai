@@ -79,6 +79,10 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
       debounceMs,
       maxDebounceMs,
     },
+    ambient: {
+      enabled: config.roleplay.proactiveEnabled ?? true,
+      cooldownSeconds: config.roleplay.proactiveCooldownSeconds ?? 180,
+    },
     timezone: config.timezone ?? "Asia/Shanghai",
   }
 })

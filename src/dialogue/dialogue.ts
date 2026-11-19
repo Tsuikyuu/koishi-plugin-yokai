@@ -52,6 +52,11 @@ export type ChannelReplyError =
   | ScheduleNotFound
   | InvalidSchedule
 
+export interface ChannelTurnResult {
+  readonly actionsExecuted: number
+  readonly spoke: boolean
+}
+
 export class ChannelRoleplay extends Context.Service<
   ChannelRoleplay,
   {
@@ -61,17 +66,21 @@ export class ChannelRoleplay extends Context.Service<
       readonly incoming: Message | readonly [Message, ...Message[]]
       readonly observed?: { readonly reason?: string }
       readonly tryEnterCommit?: Effect.Effect<boolean>
-    }) => Effect.Effect<{ readonly actionsExecuted: number }, ChannelReplyError>
+    }) => Effect.Effect<ChannelTurnResult, ChannelReplyError>
     // 频道定时任务处理器：调用 Scheduler 认领并执行，旧快照或已暂停/删除任务不执行。
     readonly scheduled: (
       task: ScheduleTask,
     ) => Effect.Effect<
-      { readonly runId: string; readonly actionsExecuted: number } | undefined,
+      ({ readonly runId: string } & ChannelTurnResult) | undefined,
       ChannelReplyError | ScheduleStoreError | InvalidSchedule
     >
     readonly proactive: (
       trigger: ProactiveTrigger,
       options?: { readonly tryEnterCommit?: Effect.Effect<boolean> },
-    ) => Effect.Effect<{ readonly actionsExecuted: number }, ChannelReplyError>
+    ) => Effect.Effect<ChannelTurnResult, ChannelReplyError>
+    readonly ambient: (
+      trigger: ProactiveTrigger,
+      options?: { readonly tryEnterCommit?: Effect.Effect<boolean> },
+    ) => Effect.Effect<ChannelTurnResult, ChannelReplyError>
   }
 >()("yokai/dialogue/ChannelRoleplay") {}

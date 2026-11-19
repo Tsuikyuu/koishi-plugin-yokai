@@ -18,6 +18,8 @@ import { ChannelRoleplay, type ChannelReplyError } from "../dialogue/dialogue"
 import { ChannelRoleplayLive } from "../dialogue/execute"
 import { makeChannelCoordinator } from "../dialogue/channel-coordinator"
 import { matchesGroupTrigger } from "../dialogue/match-trigger"
+import { AmbientTriggers } from "../dialogue/ambient/probe"
+import { AmbientTriggersLive } from "../dialogue/ambient/track-probe"
 import { ChannelStore, ChannelStoreError } from "../channels/store"
 import { ChannelMediaStore } from "../channels/media"
 import { channelMediaStoreFile } from "../channels/file-media"
@@ -101,6 +103,8 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         : undefined
       const triggers = yield* Layer.build(ChannelTriggersLive)
       const triggerService = yield* ChannelTriggers.pipe(Effect.provideContext(triggers))
+      const ambientLayer = yield* Layer.build(AmbientTriggersLive(config.ambient))
+      const ambientService = yield* AmbientTriggers.pipe(Effect.provideContext(ambientLayer))
       const history = yield* createKoishiHistory(ctx, databaseGate.withPermit, media)
       const run = yield* FiberSet.makeRuntime()
 
@@ -136,15 +140,26 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         {
           runMessage: (batch, tryEnterCommit) =>
             Effect.gen(function* () {
+              let committed = false
+              const trackedCommit = tryEnterCommit.pipe(
+                Effect.tap((allowed) =>
+                  Effect.sync(() => {
+                    if (allowed) committed = true
+                  }),
+                ),
+              )
               const result = yield* execute(batch.context, (roleplay) =>
                 roleplay.reply({
                   key: batch.key,
                   presetId: batch.presetId,
                   incoming: batch.messages,
                   observed: { ...(batch.reason === undefined ? {} : { reason: batch.reason }) },
-                  tryEnterCommit,
+                  tryEnterCommit: trackedCommit,
                 }),
               )
+              if (committed && !batch.context.isDirect) {
+                yield* ambientService.onExplicitTurn(batch.key, Date.now())
+              }
               yield* Effect.logDebug(
                 `消息回合完成，合并消息 ${batch.messages.length} 条，执行动作 ${result.actionsExecuted} 个`,
               )
@@ -163,6 +178,32 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
               Effect.catchCause(report),
               Effect.withLogSpan("turn"),
               Effect.annotateLogs({ channel: channelIdOf(trigger.channel), trigger: "next-reply" }),
+            ),
+          runAmbient: (trigger, tryEnterCommit) =>
+            Effect.gen(function* () {
+              const session = yield* history.sessionFor(trigger.channel)
+              if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
+              let committed = false
+              const trackedCommit = tryEnterCommit.pipe(
+                Effect.tap((allowed) =>
+                  Effect.sync(() => {
+                    if (allowed) committed = true
+                  }),
+                ),
+              )
+              const result = yield* execute(session, (roleplay) =>
+                roleplay.ambient(trigger, { tryEnterCommit: trackedCommit }),
+              )
+              if (committed) {
+                yield* ambientService.onProbeCompleted(trigger.channel, result.spoke, Date.now())
+              }
+              yield* Effect.logDebug(
+                `旁听探头回合完成，是否发言=${result.spoke}，执行动作 ${result.actionsExecuted} 个`,
+              )
+            }).pipe(
+              Effect.catchCause(report),
+              Effect.withLogSpan("turn"),
+              Effect.annotateLogs({ channel: channelIdOf(trigger.channel), trigger: "ambient" }),
             ),
           runScheduled: (task) =>
             Effect.gen(function* () {
@@ -183,7 +224,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         (effect) => Effect.sync(() => run(effect)),
       )
 
-      // 由 Koishi 中间件调用：入站消息立即落库，再交由单频道协调器防抖合并或静默跳过。
+      // 由 Koishi 中间件调用：入站消息立即落库，再交由单频道协调器防抖合并或累积潜水探头热度。
       const receive = Effect.fn("Yokai.receive")(function* (session: Session) {
         const key = keyOf(session)
         yield* Effect.logDebug(
@@ -203,9 +244,9 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         const now = Date.now()
         const reason = yield* triggerService.observeAndMatch(key, received.incoming, now)
         if (reason !== undefined) yield* Effect.logDebug(`消息命中短期唤醒条件：${reason}`)
+        const existing = received.direct ? undefined : yield* channels.find(key)
         let triggered = received.direct || reason !== undefined
         if (!triggered) {
-          const existing = yield* channels.find(key)
           const preset = yield* Effect.flatMap(CharacterCatalog, (service) =>
             service.get(existing?.presetId ?? config.characterId),
           ).pipe(Effect.provide(catalog()))
@@ -216,15 +257,36 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
             preset.character,
           )
         }
+        if (triggered) {
+          if (!received.direct) {
+            yield* ambientService.onExplicitTurn(key, now)
+          }
+          yield* coordinator.submitMessage({
+            key,
+            presetId: config.characterId,
+            context: session,
+            message: received.incoming,
+            triggered: true,
+            ...(reason === undefined ? {} : { reason }),
+            now,
+          })
+          return
+        }
         yield* coordinator.submitMessage({
           key,
           presetId: config.characterId,
           context: session,
           message: received.incoming,
-          triggered,
-          ...(reason === undefined ? {} : { reason }),
+          triggered: false,
           now,
         })
+        if (!received.direct && existing !== undefined) {
+          const probe = yield* ambientService.observe(key, received.incoming, now)
+          if (probe !== undefined) {
+            yield* Effect.logDebug(`群聊热度达到阈值，触发旁听探头：${probe.reason}`)
+            yield* coordinator.submitAmbient(probe)
+          }
+        }
       })
 
       const dispatch = Effect.fn("Yokai.dispatch")(function* (task: ScheduleTask) {

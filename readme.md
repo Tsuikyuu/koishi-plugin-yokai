@@ -21,8 +21,10 @@ Koishi AI 角色扮演插件。
 | `roleplay.triggerOnQuote`      | `true`                         | 群聊中引用机器人消息时是否触发生成                      |
 | `roleplay.triggerOnName`       | `true`                         | 群聊消息中包含角色名称或别名时是否触发生成              |
 | `roleplay.triggerOnNamePrefix` | `true`                         | 群聊消息以角色名称或别名开头时是否触发生成              |
-| `roleplay.debounceMs`          | `2000`                         | 定向对话时等待提及者把话说完的防抖时间（毫秒，0 关闭）  |
-| `roleplay.maxDebounceMs`       | `8000`                         | 单轮防抖合并的最长等待时间（毫秒）                      |
+| `roleplay.debounceMs`               | `2000`                         | 定向对话时等待提及者把话说完的防抖时间（毫秒，0 关闭）  |
+| `roleplay.maxDebounceMs`            | `8000`                         | 单轮防抖合并的最长等待时间（毫秒）                      |
+| `roleplay.proactiveEnabled`         | `true`                         | 是否开启群聊潜水态热度探头（多人热聊/斗图/复读时顺手看一眼） |
+| `roleplay.proactiveCooldownSeconds` | `180`                          | 群聊主动探头的基础冷却时间（秒，探头后沉默会自动指数退避） |
 
 ### 模型供应商可选参数
 

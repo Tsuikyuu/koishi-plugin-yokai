@@ -898,3 +898,124 @@ test(
     await f.ctx.lifecycle.flush()
   },
 )
+
+test(
+  "ambient probe ignores unbound channels and solo monologues, fires with zero debounce on lively group chat, backs off on silence, and yields to explicit triggers",
+  { timeout: 25000 },
+  async (t) => {
+    const f = await fixture(t)
+    await writeFile(f.filename, stringify(preset("ambient-test", ["小追求"])))
+    const send = (options: {
+      readonly id: string
+      readonly content: string
+      readonly userId: string
+      readonly channelId?: string
+    }) => {
+      const session = f.bot.session({
+        type: "message",
+        timestamp: Date.now(),
+        user: { id: options.userId, name: options.userId },
+        channel: { id: options.channelId ?? "room", type: Universal.Channel.Type.TEXT },
+        guild: { id: "guild" },
+        message: { id: options.id, content: options.content },
+      })
+      session.content = options.content
+      return f.ctx.parallel(session, "message", session)
+    }
+
+    const fork = f.ctx.plugin(yokai, {
+      ...f.config,
+      roleplay: {
+        character: "companion",
+        routineEnabled: false,
+        debounceMs: 0,
+        proactiveEnabled: true,
+        proactiveCooldownSeconds: 1,
+      },
+    })
+    assert.ok(fork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+
+    // 1. 从未绑定过角色的陌生群聊：即使多人连续复读起哄，也不会突然触发旁听探头
+    await send({ id: "u1", content: "测试复读", userId: "alice", channelId: "stranger-room" })
+    await send({ id: "u2", content: "测试复读", userId: "bob", channelId: "stranger-room" })
+    await send({ id: "u3", content: "测试复读", userId: "carol", channelId: "stranger-room" })
+    assert.equal(f.calls.length, 0)
+
+    // 2. 在 room 首次 @ 绑定角色；随后开启长防抖验证旁听探头零防抖
+    await send({ id: "bind-1", content: '<at id="bot"/> 出来玩', userId: "alice" })
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.sent.length, 1)
+
+    fork.update({
+      ...f.config,
+      roleplay: {
+        character: "companion",
+        routineEnabled: false,
+        debounceMs: 600,
+        maxDebounceMs: 3000,
+        proactiveEnabled: true,
+        proactiveCooldownSeconds: 1,
+      },
+    })
+    await f.ctx.lifecycle.flush()
+
+    // 先触发一次明确对话进入 1s 基础冷却期，冷却期内多人复读不应触发探头
+    await send({ id: "cool-seed", content: '<at id="bot"/> 记一下冷却', userId: "alice" })
+    assert.equal(f.calls.length, 2)
+    await send({ id: "cool-1", content: "复读一", userId: "alice" })
+    await send({ id: "cool-2", content: "复读一", userId: "bob" })
+    await send({ id: "cool-3", content: "复读一", userId: "carol" })
+    assert.equal(f.calls.length, 2)
+
+    // 等待 1s 基础冷却结束；单人自言自语连发 5 条不会跨过探头阈值
+    await new Promise<void>((resolve) => setTimeout(resolve, 1100))
+    for (let index = 0; index < 5; index++) {
+      await send({ id: `solo-${index}`, content: `自言自语 ${index}`, userId: "alice" })
+    }
+    assert.equal(f.calls.length, 2)
+
+    // 3. 多人复读起哄跨过热度阈值：无需等待 600ms 防抖立即触发 ambient 探头，且探头后选择沉默（<actions/>）
+    f.handleReplies((call) => complete(call, "<response><think>没话接，继续潜水</think><actions/><status/></response>"))
+    const ambientStartedAt = Date.now()
+    await send({ id: "echo-1", content: "好耶", userId: "bob" })
+    await send({ id: "echo-2", content: "好耶", userId: "carol" })
+    assert.equal(f.calls.length, 3)
+    assert.ok(Date.now() - ambientStartedAt < 450)
+    const ambientPrompt = f.calls[2]?.body.messages.find((item) => item.role === "user")?.content ?? ""
+    assert.match(ambientPrompt, /<trigger reason="ambient"/)
+    assert.match(ambientPrompt, /本次旁听探头/)
+    assert.equal(f.sent.length, 2)
+
+    // 4. 探头沉默触发指数退避（1s * 2^1 = 2s）：1.1s 后热度仍被冷却拦截，满 2.2s 后恢复可触发
+    await new Promise<void>((resolve) => setTimeout(resolve, 1100))
+    await send({ id: "backoff-1", content: "冲冲冲", userId: "alice" })
+    await send({ id: "backoff-2", content: "冲冲冲", userId: "bob" })
+    await send({ id: "backoff-3", content: "冲冲冲", userId: "carol" })
+    assert.equal(f.calls.length, 3)
+
+    // 满 2s 退避冷却后再次触发探头：若探头思考期间有人明确 @ 机器人，立即中断探头请求并让位给用户对话
+    await new Promise<void>((resolve) => setTimeout(resolve, 1100))
+    const heldAmbient = deferred<Call>()
+    f.handleReplies((call) => {
+      const prompt = call.body.messages.find((item) => item.role === "user")?.content ?? ""
+      if (prompt.includes('<trigger reason="ambient"')) {
+        heldAmbient.resolve(call)
+      } else {
+        complete(call, "<response><think/><actions><message>收到召唤</message></actions><status/></response>")
+      }
+    })
+
+    await send({ id: "preempt-1", content: "哈哈", userId: "alice" })
+    const ambientTurnTwo = send({ id: "preempt-2", content: "哈哈", userId: "bob" })
+    const inFlightAmbient = await heldAmbient.promise
+    const explicitTurn = send({ id: "preempt-at", content: '<at id="bot"/> 别潜水了快出来', userId: "carol" })
+    await inFlightAmbient.closed
+    await Promise.all([ambientTurnTwo, explicitTurn])
+    assert.equal(f.sent[f.sent.length - 1], "收到召唤")
+
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+  },
+)

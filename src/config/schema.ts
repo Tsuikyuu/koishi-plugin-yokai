@@ -113,6 +113,12 @@ export const Config: Schema<any, Config> = Schema.intersect([
       maxDebounceMs: Schema.natural()
         .default(8000)
         .description("单轮防抖合并的最长等待时间（毫秒）"),
+      proactiveEnabled: Schema.boolean()
+        .default(true)
+        .description("启用群聊潜水主动探头：当群内多人互动升温、斗图或复读起哄时，允许角色顺手旁听并自主决定是否插话"),
+      proactiveCooldownSeconds: Schema.natural()
+        .default(180)
+        .description("群聊主动探头的基础冷却时间（秒）；若角色探头后选择不说话，冷却时间会按连续沉默次数自动退避翻倍"),
     }),
   }).description("角色文件"),
 ])

@@ -22,5 +22,7 @@ export interface Config {
     readonly triggerOnNamePrefix?: boolean
     readonly debounceMs?: number
     readonly maxDebounceMs?: number
+    readonly proactiveEnabled?: boolean
+    readonly proactiveCooldownSeconds?: number
   }
 }

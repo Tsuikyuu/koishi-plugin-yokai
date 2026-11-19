@@ -32,11 +32,16 @@ export interface ChannelTurnRunner<Ctx, ScheduleError = never> {
     trigger: ProactiveTrigger,
     tryEnterCommit: Effect.Effect<boolean>,
   ) => Effect.Effect<void>
+  readonly runAmbient: (
+    trigger: ProactiveTrigger,
+    tryEnterCommit: Effect.Effect<boolean>,
+  ) => Effect.Effect<void>
   readonly runScheduled: (task: ScheduleTask) => Effect.Effect<void, ScheduleError>
 }
 
 export interface ChannelCoordinator<Ctx, ScheduleError = never> {
   readonly submitMessage: (input: IncomingSubmission<Ctx>) => Effect.Effect<void>
   readonly submitProactive: (trigger: ProactiveTrigger) => Effect.Effect<void>
+  readonly submitAmbient: (trigger: ProactiveTrigger) => Effect.Effect<void>
   readonly submitScheduled: (key: ChannelKey, task: ScheduleTask) => Effect.Effect<void, ScheduleError>
 }

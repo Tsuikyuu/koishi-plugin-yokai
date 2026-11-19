@@ -26,7 +26,7 @@ export const buildChannelContext: ChannelContextBuilder = ({
       ? `<trigger reason="${escapeXml(trigger.reason ?? "message")}" messageid="${escapeXml(trigger.messages[0].id)}">${escapeXml(trigger.reason ?? "")}</trigger>`
       : trigger.type === "schedule"
         ? `<trigger reason="wake-up" scheduleid="${escapeXml(trigger.run.scheduleId)}" scheduled_at="${trigger.run.scheduledAt.getTime()}">${escapeXml(trigger.text)}</trigger>`
-        : `<trigger reason="next-reply" time="${trigger.time}">${escapeXml(trigger.reason)}</trigger>`
+        : `<trigger reason="${trigger.type}" time="${trigger.time}">${escapeXml(trigger.reason)}</trigger>`
   const refs = new Map(attachments.map((attachment) => [`${attachment.messageId}:${attachment.part}`, attachment.ref]))
   const knownStickers = new Map<string, KnownStickerView>(
     stickers.map((sticker) => [sticker.sha256, { id: sticker.id, summary: sticker.summary }]),
@@ -77,10 +77,15 @@ export const buildChannelContext: ChannelContextBuilder = ({
         ]
       : trigger.type === "schedule"
         ? ["# 本次定时触发", "你安排的事情到时间了，具体内容见 trigger。请结合当前情境决定是否发言。"]
-        : [
-            "# 本次短期唤醒",
-            "你之前设置的短期关注条件已满足，具体内容见 trigger。请结合最新聊天记录决定是否接话、发表情包或保持沉默（空 actions）；若仍需继续留意后续动静，可再次输出 next-reply。",
-          ]),
+        : trigger.type === "ambient"
+          ? [
+              "# 本次旁听探头",
+              `${trigger.reason}。没人直接点名你；请浏览最新聊天记录：遇到真正感兴趣、接得上梗的话题可以自然插话或发表情包（想继续聊可附带 next-reply），看到喜欢的梗图也可以只用 sticker-save 默默收藏而不说话；若插不上话或没兴趣，保持空 actions 继续潜水即可。`,
+            ]
+          : [
+              "# 本次短期唤醒",
+              "你之前设置的短期关注条件已满足，具体内容见 trigger。请结合最新聊天记录决定是否接话、发表情包或保持沉默（空 actions）；若仍需继续留意后续动静，可再次输出 next-reply。",
+            ]),
     "# 提示",
     `- 消息最开头的“${preset.character.name}”（若存在）只是一个对你的称呼，并不与后面的词构成组合关系，如：“${preset.character.name}硬盘怎么扩容”实际上是在问“硬盘怎么扩容？”`,
     "- 并非每一条消息都需要回复",
@@ -127,7 +132,7 @@ export const buildChannelContext: ChannelContextBuilder = ({
               ]),
           `state 是此前保存的状态，short_memory 是过往交流摘要，需要结合当前情境判断是否仍适用。${routine === undefined ? "" : "current_activity 提供此刻的生活背景；"}没有时间依据时，不把旧活动和短期记忆当成刚刚发生的事。`,
           "生活经历应符合角色设定，不依据旧记录中与角色设定冲突的内容继续编写经历。",
-          "trigger reason 为 wake-up 或 next-reply 时，这是你主动发起的回合；不要伪造用户消息，结合当前情境决定是否发言。",
+          "trigger reason 为 wake-up、next-reply 或 ambient 时，这是无人直接点名你的主动回合；不要伪造用户消息，结合当前情境决定是否发言、收藏表情包或保持沉默。",
           `回应对方此刻表达的意思和情绪，只提及与话题有关的生活细节${routine === undefined ? "。" : "，不为了说明作息而补充起止时间、前后活动或解释整条时间线。"}`,
           "按角色性格决定说多少，不必每次都把事情解释完整。",
           channelOutputProtocol(routine !== undefined),

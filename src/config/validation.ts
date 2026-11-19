@@ -99,6 +99,8 @@ export const AppConfig = Schema.Struct({
     triggerOnNamePrefix: Schema.optionalKey(Schema.Boolean),
     debounceMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     maxDebounceMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    proactiveEnabled: Schema.optionalKey(Schema.Boolean),
+    proactiveCooldownSeconds: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   }),
 })
 export type AppConfig = typeof AppConfig.Type
