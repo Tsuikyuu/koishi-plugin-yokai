@@ -423,13 +423,15 @@ test("context skips known/self stickers in attachment window and renders dynamic
   }
   const trigger: ChannelTrigger = {
     type: "message",
-    message: {
-      id: Schema.decodeSync(MessageId)("m3"),
-      sender: Schema.decodeSync(ParticipantId)("u1"),
-      time: 4,
-      parts: [{ type: "text", text: "这图什么意思" }],
-      quote: Schema.decodeSync(MessageId)("m1"),
-    },
+    messages: [
+      {
+        id: Schema.decodeSync(MessageId)("m3"),
+        sender: Schema.decodeSync(ParticipantId)("u1"),
+        time: 4,
+        parts: [{ type: "text", text: "这图什么意思" }],
+        quote: Schema.decodeSync(MessageId)("m1"),
+      },
+    ],
   }
   const selected = selectImages(history, trigger, new Set([savedSticker.sha256]))
   assert.deepEqual(

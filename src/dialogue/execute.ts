@@ -1,12 +1,15 @@
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { InvalidReply } from "./invalid-reply"
 import { channelIdOf, type Channel, type ChannelKey } from "../channels/channel"
-import { type ChannelTrigger } from "./trigger"
+import type { Message } from "../channels/message"
+import { type ChannelTrigger, type GroupTriggerConfig } from "./trigger"
+import { matchesGroupTrigger, triggerTargetFromHistory } from "./match-trigger"
 import { ChannelExecutionError, ChannelRoleplay } from "./dialogue"
-import { ChannelPlatform } from "../channels/messaging"
+import { ChannelPlatform, type ChannelHistory } from "../channels/messaging"
 import { ChannelMediaStore } from "../channels/media"
 import { ChannelNotFound, ChannelStore } from "../channels/store"
 import { CharacterCatalog } from "../characters/catalog"
+import type { CharacterPreset } from "../characters/preset"
 import { CharacterRoutines } from "../characters/routines"
 import { CharacterRoutineError } from "../characters/routine"
 import { MaxCharacterStickers, type StickerId, type StickerInput } from "../characters/sticker"
@@ -22,7 +25,6 @@ import { initializeChannel, validateChannelPresets } from "../channels/initializ
 import { buildChannelContext } from "./context/build-context"
 import { parseChannelResponse } from "./response/parse-xml"
 import { executeNoteAction, loadRecentNotes } from "../notebook/execute-actions"
-import { makeChannelLock } from "../channels/lock"
 import { generateChannelResponse } from "./tool-loop"
 import { loadImageAttachments } from "./context/attachments"
 import type { MessageAction, StickerDelivery } from "../channels/message-action"
@@ -55,7 +57,11 @@ type Execution =
   | { readonly type: "note-add"; readonly action: NoteAction }
   | { readonly type: "routine"; readonly action: RoutineAction }
 
-export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutines["Service"] | undefined) =>
+export const ChannelRoleplayLive = (
+  timezone: string,
+  routines: CharacterRoutines["Service"] | undefined,
+  groupTriggers?: GroupTriggerConfig,
+) =>
   Layer.effect(
     ChannelRoleplay,
     Effect.gen(function* () {
@@ -68,25 +74,36 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
       const platform = yield* ChannelPlatform
       const model = yield* ModelGateway
       const scheduler = yield* Scheduler
-      const withChannel = yield* makeChannelLock
       yield* validateChannelPresets
 
-      const execute = Effect.fn("ChannelRoleplay.execute")(function* (channel: Channel, trigger: ChannelTrigger) {
+      const execute = Effect.fn("ChannelRoleplay.execute")(function* (
+        channel: Channel,
+        trigger: ChannelTrigger,
+        options?: {
+          readonly preloaded?: { readonly preset: CharacterPreset; readonly history: ChannelHistory }
+          readonly tryEnterCommit?: Effect.Effect<boolean>
+        },
+      ) {
         yield* Effect.logDebug(
           `开始执行回合，触发类型 ${trigger.type}${"reason" in trigger && trigger.reason ? `，原因：${trigger.reason}` : ""}`,
         )
-        yield* triggers.clear(channel)
-        const preset = yield* characters.get(channel.presetId)
+        const preset = options?.preloaded ? options.preloaded.preset : yield* characters.get(channel.presetId)
         const currentStickers = yield* stickers.list(channel.presetId)
         yield* Effect.logDebug(
           `已加载角色预设 ${channel.presetId}（${preset.character.name}），当前表情包 ${currentStickers.length} 张`,
         )
-        const history = yield* platform.history(
-          channel,
-          trigger.type === "message"
-            ? { beforeMessageId: trigger.message.id, limit: 50 }
-            : { beforeTime: trigger.time, limit: 50 },
-        )
+        const history = options?.preloaded
+          ? options.preloaded.history
+          : yield* platform.history(
+              channel,
+              trigger.type === "message"
+                ? {
+                    beforeMessageId: trigger.messages[0].id,
+                    incomingIds: trigger.messages.map((message) => message.id),
+                    limit: 50,
+                  }
+                : { beforeTime: trigger.time, limit: 50 },
+            )
         yield* Effect.logDebug(
           `已读取历史 ${history.messages.length} 条，参与者 ${history.participants.length} 人`,
         )
@@ -130,11 +147,16 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
           context,
           notes.flatMap((note) => [note.id, ...note.relations.map((relation) => relation.note.id)]),
           timezone,
+          options?.tryEnterCommit,
         ).pipe(
           Effect.provideService(ModelGateway, model),
           Effect.provideService(NotebookStore, notebook),
           Effect.provideService(Scheduler, scheduler),
         )
+        if (output === undefined) {
+          yield* Effect.logDebug("本轮思考已被后续新消息抢占，放弃继续生成")
+          return { actionsExecuted: 0 }
+        }
         yield* Effect.logDebug(`模型最终输出：\n${output.text}`)
         const response = yield* parseChannelResponse(output.text).pipe(
           Effect.tapError((error) => Effect.logDebug(`响应解析失败：${error.reason}`)),
@@ -145,7 +167,7 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
         const nextReplies = response.actions.filter((action) => action.type === "next-reply")
         const messageIds = new Set([
           ...history.messages.map((message) => message.id),
-          ...(trigger.type === "message" ? [trigger.message.id] : []),
+          ...(trigger.type === "message" ? trigger.messages.map((message) => message.id) : []),
         ])
         const participantIds = new Set(history.participants.map((participant) => participant.id))
         const noteIds = new Set(output.noteIds)
@@ -260,6 +282,14 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
               : { type: "routine", action },
           )
         }
+        if (options?.tryEnterCommit !== undefined) {
+          const allowed = yield* options.tryEnterCommit
+          if (!allowed) {
+            yield* Effect.logDebug("本轮思考已被后续新消息抢占，放弃提交")
+            return { actionsExecuted: 0 }
+          }
+        }
+        yield* triggers.clear(channel)
         let completedActions = 0
         for (const execution of executions) {
           yield* Effect.logDebug(`执行动作 #${completedActions + 1} ${execution.type}`)
@@ -314,61 +344,85 @@ export const ChannelRoleplayLive = (timezone: string, routines: CharacterRoutine
       })
 
       return ChannelRoleplay.of({
-        reply: ({ key, presetId, incoming }) =>
-          withChannel(
-            channelIdOf(key),
-            Effect.gen(function* () {
-              const channel = yield* initializeChannel(key, presetId).pipe(
-                Effect.provideService(ChannelStore, channels),
-                Effect.provideService(CharacterCatalog, characters),
-              )
-              yield* Effect.logDebug(`频道已绑定角色 ${channel.presetId}`)
+        reply: ({ key, presetId, incoming, observed, tryEnterCommit }) =>
+          Effect.gen(function* () {
+            const messages: readonly [Message, ...Message[]] = "id" in incoming ? [incoming] : incoming
+            const channel = yield* initializeChannel(key, presetId).pipe(
+              Effect.provideService(ChannelStore, channels),
+              Effect.provideService(CharacterCatalog, characters),
+            )
+            yield* Effect.logDebug(`频道已绑定角色 ${channel.presetId}`)
+            const preset = yield* characters.get(channel.presetId)
+            const history = yield* platform.history(channel, {
+              beforeMessageId: messages[0].id,
+              incomingIds: messages.map((message) => message.id),
+              limit: 50,
+            })
+            let reason = observed?.reason
+            if (observed === undefined) {
               const now = yield* DateTime.nowAsDate
-              const reason = yield* triggers.observeAndMatch(channel, incoming, now.getTime())
+              for (const message of messages) {
+                const matched = yield* triggers.observeAndMatch(channel, message, now.getTime())
+                if (matched !== undefined && reason === undefined) reason = matched
+              }
               if (reason !== undefined) yield* Effect.logDebug(`消息命中短期唤醒条件：${reason}`)
-              return yield* execute(channel, {
+              if (
+                groupTriggers !== undefined &&
+                !history.direct &&
+                reason === undefined &&
+                !messages.some((message) =>
+                  matchesGroupTrigger(groupTriggers, message, triggerTargetFromHistory(message, history), preset.character),
+                )
+              ) {
+                yield* Effect.logDebug("群聊消息未命中触发条件，跳过本轮")
+                return { actionsExecuted: 0 }
+              }
+            }
+            return yield* execute(
+              channel,
+              {
                 type: "message",
-                message: incoming,
+                messages,
                 ...(reason === undefined ? {} : { reason }),
-              })
-            }),
-          ),
+              },
+              {
+                preloaded: { preset, history },
+                ...(tryEnterCommit === undefined ? {} : { tryEnterCommit }),
+              },
+            )
+          }),
         scheduled: (task) =>
           Effect.gen(function* () {
             const payload = yield* Schema.decodeUnknownEffect(WakeUpReplyPayload, { onExcessProperty: "error" })(
               task.payload,
             ).pipe(Effect.mapError(() => new InvalidReply({ reason: "该任务不是有效的主动唤醒任务" })))
-            return yield* withChannel(
-              channelIdOf(payload),
-              scheduler
-                .run(
-                  task,
-                  (run) =>
-                    Effect.gen(function* () {
-                      const channel = yield* bound(channels, payload)
-                      const now = yield* DateTime.nowAsDate
-                      return yield* execute(channel, { type: "schedule", run, text: payload.text, time: now.getTime() })
-                    }),
-                  (error) =>
-                    error._tag === "ChannelExecutionError"
-                      ? { stage: error.stage, completedActions: error.completedActions }
-                      : {},
-                )
-                .pipe(
-                  Effect.map((result) =>
-                    result === undefined ? undefined : { runId: result.runId, ...result.result },
-                  ),
+            return yield* scheduler
+              .run(
+                task,
+                (run) =>
+                  Effect.gen(function* () {
+                    const channel = yield* bound(channels, payload)
+                    const now = yield* DateTime.nowAsDate
+                    return yield* execute(channel, { type: "schedule", run, text: payload.text, time: now.getTime() })
+                  }),
+                (error) =>
+                  error._tag === "ChannelExecutionError"
+                    ? { stage: error.stage, completedActions: error.completedActions }
+                    : {},
+              )
+              .pipe(
+                Effect.map((result) =>
+                  result === undefined ? undefined : { runId: result.runId, ...result.result },
                 ),
-            )
+              )
           }),
-        proactive: (trigger) =>
+        proactive: (trigger, options) =>
           Effect.gen(function* () {
-            return yield* withChannel(
-              channelIdOf(trigger.channel),
-              Effect.gen(function* () {
-                const channel = yield* bound(channels, trigger.channel)
-                return yield* execute(channel, { type: "next-reply", reason: trigger.reason, time: trigger.time })
-              }),
+            const channel = yield* bound(channels, trigger.channel)
+            return yield* execute(
+              channel,
+              { type: "next-reply", reason: trigger.reason, time: trigger.time },
+              options?.tryEnterCommit === undefined ? undefined : { tryEnterCommit: options.tryEnterCommit },
             )
           }),
       })

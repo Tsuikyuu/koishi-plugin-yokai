@@ -43,12 +43,25 @@ const complete = (call: Call, content: string) => {
   call.response.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] }))
 }
 const routine = JSON.stringify({ entries: [{ start: "00:00", end: "24:00", activity: "reading" }] })
-const preset = (setting: string) => ({
+const preset = (
+  setting: string,
+  aliases: readonly string[] = [
+    "first",
+    "second",
+    "interrupted",
+    "enabled",
+    "disabled",
+    "unsupported",
+    "service",
+    "schedule",
+    "silence",
+  ],
+) => ({
   version: 1,
   character: {
     id: "companion",
     name: "Yokai",
-    aliases: [],
+    aliases,
     basicSetting: setting,
     detailedSetting: "",
     scene: "chat",
@@ -143,7 +156,7 @@ const fixture = async (t: TestContext) => {
       },
     },
     characters: { directory: "characters", presets: { companion: "companion.yml" } },
-    roleplay: { character: "companion" },
+    roleplay: { character: "companion", debounceMs: 0 },
   }
   const incoming = (id: string, channelId: string) => {
     const session = bot.session({
@@ -163,6 +176,7 @@ const fixture = async (t: TestContext) => {
   }
   return {
     ctx,
+    bot,
     config,
     calls,
     sent,
@@ -502,5 +516,360 @@ test(
     assert.deepEqual(f.sent, [])
     const history = await f.ctx.database.get("yokai_history", {})
     assert.deepEqual(history.map((row) => row.text).sort(), ["arm-silence", "seed-schedule"])
+  },
+)
+
+test(
+  "group trigger gates control at, quote, name and name-prefix while preserving history, next-reply and private chat",
+  { timeout: 20000 },
+  async (t) => {
+    const f = await fixture(t)
+    await writeFile(f.filename, stringify(preset("gate-test", ["小追求"])))
+    const send = (options: {
+      readonly id: string
+      readonly content: string
+      readonly userId?: string
+      readonly direct?: boolean
+      readonly quote?: { readonly id: string; readonly user?: { readonly id: string } }
+    }) => {
+      const session = f.bot.session({
+        type: "message",
+        timestamp: Date.now(),
+        user: { id: options.userId ?? "human", name: "Human" },
+        channel: {
+          id: options.direct ? "private:human" : "room",
+          type: options.direct ? Universal.Channel.Type.DIRECT : Universal.Channel.Type.TEXT,
+        },
+        ...(options.direct ? {} : { guild: { id: "guild" } }),
+        message: {
+          id: options.id,
+          content: options.content,
+        },
+      })
+      session.content = options.content
+      if (options.quote && session.event.message) {
+        session.event.message.quote = options.quote
+      }
+      return f.ctx.parallel(session, "message", session)
+    }
+
+    const baseRoleplay = {
+      character: "companion",
+      routineEnabled: false,
+      triggerOnAt: false,
+      triggerOnQuote: false,
+      triggerOnName: false,
+      triggerOnNamePrefix: false,
+      debounceMs: 0,
+    }
+    const fork = f.ctx.plugin(yokai, {
+      ...f.config,
+      roleplay: { ...baseRoleplay, triggerOnAt: true },
+    })
+    assert.ok(fork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+
+    // 未命中任何门控的普通群消息只写入历史，不触发模型调用
+    await send({ id: "m-ignored", content: "今天天气不错" })
+    assert.equal(f.calls.length, 0)
+    assert.equal((await f.ctx.database.get("yokai_history", { messageId: "m-ignored" })).length, 1)
+
+    // @ 其他群友不触发，@ 机器人触发
+    await send({ id: "m-at-other", content: '<at id="other"/> 你好' })
+    assert.equal(f.calls.length, 0)
+    await send({ id: "m-at-bot", content: '<at id="bot"/> 你好' })
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.sent.length, 1)
+
+    // 仅开启 quote 触发：引用人类消息不触发，引用机器人已发送消息（sent-1）触发
+    fork.update({
+      ...f.config,
+      roleplay: { ...baseRoleplay, triggerOnQuote: true },
+    })
+    await f.ctx.lifecycle.flush()
+    await send({ id: "m-quote-at-disabled", content: '<at id="bot"/> 只开了引用触发' })
+    assert.equal(f.calls.length, 1)
+    await send({ id: "m-quote-human", content: "引用别人", quote: { id: "m-ignored" } })
+    assert.equal(f.calls.length, 1)
+    await send({ id: "m-quote-bot", content: "引用机器人", quote: { id: "sent-1" } })
+    assert.equal(f.calls.length, 2)
+
+    // 仅开启名称开头触发：句中提及不触发，开头提及角色名或别名触发
+    fork.update({
+      ...f.config,
+      roleplay: { ...baseRoleplay, triggerOnNamePrefix: true },
+    })
+    await f.ctx.lifecycle.flush()
+    await send({ id: "m-name-middle", content: "刚才小追求说了什么" })
+    assert.equal(f.calls.length, 2)
+    await send({ id: "m-name-prefix", content: "  小追求今天吃什么" })
+    assert.equal(f.calls.length, 3)
+
+    // 仅开启名称包含触发：句中提及触发，并在回复中注册针对 human 的 next-reply
+    f.handleReplies((call) =>
+      complete(
+        call,
+        '<response><think/><actions><next-reply type="message_from_user" user_id="human" /><message>等你下一句</message></actions><status/></response>',
+      ),
+    )
+    fork.update({
+      ...f.config,
+      roleplay: { ...baseRoleplay, triggerOnName: true },
+    })
+    await f.ctx.lifecycle.flush()
+    await send({ id: "m-name-contains", content: "问问Yokai的意见" })
+    assert.equal(f.calls.length, 4)
+
+    // 即使四个门控全部关闭，其他群友插话不会清空 next-reply，目标用户下一条消息仍可触发；私聊也不受门控限制
+    f.handleReplies((call) =>
+      complete(call, "<response><think/><actions><message>收到后续</message></actions><status/></response>"),
+    )
+    fork.update({
+      ...f.config,
+      roleplay: baseRoleplay,
+    })
+    await f.ctx.lifecycle.flush()
+    // 先重新在当前实例注册一次 next-reply（插件重载会重建内存触发器）
+    fork.update({
+      ...f.config,
+      roleplay: { ...baseRoleplay, triggerOnAt: true },
+    })
+    await f.ctx.lifecycle.flush()
+    f.handleReplies((call) =>
+      complete(
+        call,
+        '<response><think/><actions><next-reply type="message_from_user" user_id="human" /></actions><status/></response>',
+      ),
+    )
+    await send({ id: "m-arm-next", content: '<at id="bot"/> 我有话说' })
+    assert.equal(f.calls.length, 5)
+    f.handleReplies((call) =>
+      complete(call, "<response><think/><actions><message>接上话了</message></actions><status/></response>"),
+    )
+    await send({ id: "m-bystander", content: "路人插话", userId: "other" })
+    assert.equal(f.calls.length, 5)
+    await send({ id: "m-followup", content: "这是我的下半句话", userId: "human" })
+    assert.equal(f.calls.length, 6)
+
+    // 四个群聊门控全关时，私聊消息照常触发
+    fork.update({
+      ...f.config,
+      roleplay: baseRoleplay,
+    })
+    await f.ctx.lifecycle.flush()
+    await send({ id: "m-direct", content: "私聊不看群门控", direct: true })
+    assert.equal(f.calls.length, 7)
+
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+  },
+)
+
+test(
+  "debounce waits only for tracked speakers, preempts unsent thinking on tracked follow-up, and runs proactive turns immediately",
+  { timeout: 20000 },
+  async (t) => {
+    const f = await fixture(t)
+    await writeFile(f.filename, stringify(preset("debounce-test", ["小追求"])))
+    const send = (options: { readonly id: string; readonly content: string; readonly userId?: string }) => {
+      const session = f.bot.session({
+        type: "message",
+        timestamp: Date.now(),
+        user: { id: options.userId ?? "alice", name: options.userId ?? "Alice" },
+        channel: { id: "room", type: Universal.Channel.Type.TEXT },
+        guild: { id: "guild" },
+        message: { id: options.id, content: options.content },
+      })
+      session.content = options.content
+      return f.ctx.parallel(session, "message", session)
+    }
+
+    const fork = f.ctx.plugin(yokai, {
+      ...f.config,
+      roleplay: {
+        character: "companion",
+        routineEnabled: false,
+        triggerOnAt: true,
+        triggerOnQuote: true,
+        triggerOnName: true,
+        triggerOnNamePrefix: true,
+        debounceMs: 120,
+        maxDebounceMs: 600,
+      },
+    })
+    assert.ok(fork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+
+    // 1. 提及者连发多条消息时合并为单次生成；路人插话不延长防抖但保留在批次序列中
+    const firstTurn = send({ id: "d1", content: '<at id="bot"/>' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 40))
+    await send({ id: "d2", content: "路人插一句无关的话", userId: "bystander" })
+    const followUpTurn = send({ id: "d3", content: "我想问今天吃什么" })
+    await Promise.all([firstTurn, followUpTurn])
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.sent.length, 1)
+    const mergedUserPrompt = f.calls[0]?.body.messages.find((item) => item.role === "user")?.content ?? ""
+    assert.match(
+      mergedUserPrompt,
+      /<incoming>[\s\S]*id="d1"[\s\S]*id="d2"[\s\S]*id="d3"[\s\S]*<\/incoming>/,
+    )
+
+    // 2. 正在思考（尚未发送消息）时：路人说话不打断，提及者追发则中断旧请求并合并重新生成
+    const inFlight = deferred<Call>()
+    const rebuilt = deferred<Call>()
+    let turnCallCount = 0
+    f.handleReplies((call) => {
+      turnCallCount++
+      if (turnCallCount === 1) {
+        inFlight.resolve(call)
+      } else {
+        rebuilt.resolve(call)
+      }
+    })
+    const partOne = send({ id: "p1", content: '<at id="bot"/> 我先说上半句' })
+    const firstCall = await inFlight.promise
+    // 路人在模型思考期间发言：不应中断当前 HTTP 请求
+    await send({ id: "p2", content: "路人路过", userId: "bystander" })
+    assert.equal(firstCall.response.destroyed, false)
+    // 提及者继续追发下半句：立即中断未发出的旧请求，防抖后合并为新请求
+    const partTwo = send({ id: "p3", content: "这是补充的下半句" })
+    await firstCall.closed
+    const secondCall = await rebuilt.promise
+    const rebuiltPrompt = secondCall.body.messages.find((item) => item.role === "user")?.content ?? ""
+    assert.match(
+      rebuiltPrompt,
+      /<incoming>[\s\S]*id="p1"[\s\S]*id="p2"[\s\S]*id="p3"[\s\S]*<\/incoming>/,
+    )
+    complete(
+      secondCall,
+      '<response><think/><actions><next-reply type="silence" user_id="all" seconds="1" /><message quote="p3">听完了</message></actions><status/></response>',
+    )
+    await Promise.all([partOne, partTwo])
+    assert.equal(f.sent.length, 2)
+
+    // 3. 主动唤醒（如 silence 到期）在开启 2500ms 防抖时无需防抖，满 1 秒即直接进入生成
+    const proactiveCall = deferred<Call>()
+    f.handleReplies((call) => {
+      const prompt = call.body.messages.find((item) => item.role === "user")?.content ?? ""
+      if (prompt.includes('<trigger reason="next-reply"')) {
+        proactiveCall.resolve(call)
+      } else {
+        complete(
+          call,
+          '<response><think/><actions><next-reply type="silence" user_id="all" seconds="1" /></actions><status/></response>',
+        )
+      }
+    })
+    fork.update({
+      ...f.config,
+      roleplay: {
+        character: "companion",
+        routineEnabled: false,
+        debounceMs: 2500,
+        maxDebounceMs: 8000,
+      },
+    })
+    await f.ctx.lifecycle.flush()
+    await send({ id: "s1", content: '<at id="bot"/> 等我沉默一秒' })
+    const silenceStartedAt = Date.now()
+    const proactive = await proactiveCall.promise
+    assert.ok(Date.now() - silenceStartedAt < 2300)
+    complete(proactive, "<response><think/><actions><message>冒泡</message></actions><status/></response>")
+
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+  },
+)
+
+test(
+  "plugin startup and bot reconnect backfill missed channel messages into model history without replying to offline messages",
+  { timeout: 20000 },
+  async (t) => {
+    const f = await fixture(t)
+    await writeFile(f.filename, stringify(preset("sync-test", ["小追求"])))
+    const roleplayConfig: Config = {
+      ...f.config,
+      roleplay: {
+        character: "companion",
+        routineEnabled: false,
+        debounceMs: 0,
+      },
+    }
+
+    // 第一阶段：启动插件并完成首轮交互，使频道 room 绑定角色并记录初始历史
+    const firstFork = f.ctx.plugin(yokai, roleplayConfig)
+    assert.ok(firstFork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(firstFork.error)
+
+    const send = (id: string, content: string, timestamp: number) => {
+      const session = f.bot.session({
+        type: "message",
+        timestamp,
+        user: { id: "human", name: "Human" },
+        channel: { id: "room", type: Universal.Channel.Type.TEXT },
+        guild: { id: "guild" },
+        message: { id, content },
+      })
+      session.content = content
+      return f.ctx.parallel(session, "message", session)
+    }
+
+    await send("m-before", '<at id="bot"/> 我先去睡了', 1000)
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.sent.length, 1)
+
+    // 关闭插件，模拟停机期间群内产生包含提及机器人的多条新消息
+    firstFork.dispose()
+    await f.ctx.lifecycle.flush()
+
+    let syncedNotify = deferred<void>()
+    let platformHistory: Universal.Message[] = [
+      { id: "m-before", content: '<at id="bot"/> 我先去睡了', timestamp: 1000, user: { id: "human", name: "Human" } },
+      { id: "sent-1", content: "reply model-a", timestamp: 1001, user: { id: "bot", name: "Yokai" } },
+      { id: "m-offline-1", content: "半夜房间着火了", timestamp: 2000, user: { id: "alice", name: "Alice" } },
+      { id: "m-offline-2", content: '<at id="bot"/> 救命', timestamp: 2001, user: { id: "alice", name: "Alice" } },
+    ]
+    f.bot.getMessageList = async (channelId) => {
+      assert.equal(channelId, "room")
+      queueMicrotask(() => syncedNotify.resolve())
+      return { data: platformHistory }
+    }
+
+    // 第二阶段：重启插件，自动补齐停机期间消息，但不对离线旧消息触发回复
+    const secondFork = f.ctx.plugin(yokai, roleplayConfig)
+    assert.ok(secondFork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(secondFork.error)
+    await syncedNotify.promise
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.sent.length, 1)
+
+    // 第三阶段：模拟机器人断线期间又产生新消息，重连上线后再次补齐
+    f.bot.offline()
+    syncedNotify = deferred<void>()
+    platformHistory = [
+      ...platformHistory,
+      { id: "m-reconnect-gap", content: "幸好火已经扑灭了", timestamp: 3000, user: { id: "alice", name: "Alice" } },
+    ]
+    f.bot.online()
+    await syncedNotify.promise
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    assert.equal(f.calls.length, 1)
+
+    // 发送在线新消息触发回合，模型上下文应完整包含停机期间和断线期间的所有消息
+    await send("m-wakeup", '<at id="bot"/> 早上好', 4000)
+    assert.equal(f.calls.length, 2)
+    const userPrompt = f.calls[1]?.body.messages.find((item) => item.role === "user")?.content ?? ""
+    assert.match(
+      userPrompt,
+      /<history>[\s\S]*id="m-before"[\s\S]*id="sent-1"[\s\S]*id="m-offline-1"[\s\S]*半夜房间着火了[\s\S]*id="m-offline-2"[\s\S]*id="m-reconnect-gap"[\s\S]*幸好火已经扑灭了[\s\S]*<\/history>/,
+    )
+
+    secondFork.dispose()
+    await f.ctx.lifecycle.flush()
   },
 )

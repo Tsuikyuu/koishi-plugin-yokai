@@ -1,6 +1,6 @@
 import { Effect, Layer, Ref, Result, Schema, Semaphore } from "effect"
 import { h, Universal, type Context, type Session } from "koishi"
-import { Message, Participant, messageText, type MessagePart } from "./message"
+import { Message, Participant, ParticipantId, messageText, type MessagePart } from "./message"
 import { channelIdOf, type ChannelId, type ChannelKey } from "./channel"
 import { type ChannelOutboundAction } from "./message-action"
 import type { ChannelMediaStore } from "./media"
@@ -527,12 +527,31 @@ export const createKoishiHistory = (
             id: session.userId,
             name: session.event.member?.nick || session.event.user?.name || session.userId,
           }).pipe(Effect.mapError(() => new KoishiHistoryError({ operation: "record" })))
-          const duplicate = yield* Effect.tryPromise({
-            try: () =>
-              ctx.database.get("yokai_history", { ...key, messageId: incoming.id }, { fields: ["id"], limit: 1 }),
+          const botId = yield* Schema.decodeUnknownEffect(ParticipantId)(session.selfId).pipe(
+            Effect.mapError(() => new KoishiHistoryError({ operation: "record" })),
+          )
+          const { isDuplicate, quotedSenderId } = yield* Effect.tryPromise({
+            try: async () => {
+              const existing = await ctx.database.get(
+                "yokai_history",
+                { ...key, messageId: incoming.id },
+                { fields: ["id"], limit: 1 },
+              )
+              if (existing.length > 0) return { isDuplicate: true, quotedSenderId: undefined }
+              if (incoming.quote === undefined) return { isDuplicate: false, quotedSenderId: undefined }
+              if (session.quote?.user?.id !== undefined) {
+                return { isDuplicate: false, quotedSenderId: session.quote.user.id }
+              }
+              const [quoted] = await ctx.database.get(
+                "yokai_history",
+                { ...key, messageId: incoming.quote },
+                { fields: ["senderId"], limit: 1 },
+              )
+              return { isDuplicate: false, quotedSenderId: quoted?.senderId }
+            },
             catch: () => new KoishiHistoryError({ operation: "record" }),
           }).pipe(Effect.uninterruptible, serialize)
-          if (duplicate.length) {
+          if (isDuplicate) {
             yield* Effect.logDebug(`消息 ${incoming.id} 已在历史中，视为重复事件`)
             return
           }
@@ -540,7 +559,13 @@ export const createKoishiHistory = (
           yield* Effect.logDebug(
             `已记录入站消息 ${incoming.id}，发送者 ${participant.name}(${participant.id})${incoming.quote ? `，引用 ${incoming.quote}` : ""}：${messageText(incoming)}`,
           )
-          return { key, incoming }
+          return {
+            key,
+            incoming,
+            botId,
+            direct: session.isDirect,
+            quotedBot: quotedSenderId === session.selfId,
+          }
         }).pipe(
           Effect.ensuring(
             realtimeTag === undefined
@@ -661,7 +686,7 @@ export const createKoishiHistory = (
         ChannelPlatform.of({
           history: Effect.fn("KoishiHistory.history")(function* (key, query) {
             const where = keyFields(key)
-            const { rows, incoming } = yield* Effect.tryPromise({
+            const { rows, incomingRows, quotedSenderId } = yield* Effect.tryPromise({
               try: async () => {
                 if ("beforeMessageId" in query) {
                   const [incoming] = await ctx.database.get(
@@ -675,14 +700,33 @@ export const createKoishiHistory = (
                     { ...where, id: { $lt: incoming.id } },
                     { sort: { id: "desc" }, limit: Math.min(query.limit, 50) },
                   )
-                  return { rows, incoming }
+                  const batchIds = query.incomingIds ?? [query.beforeMessageId]
+                  const incomingRows =
+                    batchIds.length <= 1
+                      ? [incoming]
+                      : await ctx.database.get("yokai_history", { ...where, messageId: { $in: [...batchIds] } })
+                  const inWindow =
+                    incoming.quote === null ? undefined : rows.find((row) => row.messageId === incoming.quote)
+                  const [quoted] =
+                    incoming.quote === null || inWindow !== undefined
+                      ? []
+                      : await ctx.database.get(
+                          "yokai_history",
+                          { ...where, messageId: incoming.quote },
+                          { fields: ["senderId"], limit: 1 },
+                        )
+                  return {
+                    rows,
+                    incomingRows,
+                    quotedSenderId: inWindow?.senderId ?? quoted?.senderId ?? session.quote?.user?.id,
+                  }
                 }
                 const rows = await ctx.database.get(
                   "yokai_history",
                   { ...where, time: { $lt: new Date(query.beforeTime) } },
                   { sort: { id: "desc" }, limit: Math.min(query.limit, 50) },
                 )
-                return { rows, incoming: undefined }
+                return { rows, incomingRows: [], quotedSenderId: undefined }
               },
               catch: () => new ChannelPlatformError({ operation: "history" }),
             }).pipe(Effect.uninterruptible, serialize)
@@ -693,28 +737,18 @@ export const createKoishiHistory = (
               id: session.selfId,
               name: session.bot.user?.name || session.selfId,
             }).pipe(Effect.mapError(() => new ChannelPlatformError({ operation: "history" })))
-            const participants = yield* Effect.forEach(rows, (row) =>
+            const participants = yield* Effect.forEach([...rows, ...incomingRows], (row) =>
               Schema.decodeUnknownEffect(Participant)({
                 id: row.senderId,
                 name: row.senderName,
               }).pipe(Effect.mapError(() => new ChannelPlatformError({ operation: "history" }))),
             )
-            const incomingParticipant =
-              incoming !== undefined
-                ? yield* Schema.decodeUnknownEffect(Participant)({
-                    id: incoming.senderId,
-                    name: incoming.senderName,
-                  }).pipe(Effect.mapError(() => new ChannelPlatformError({ operation: "history" })))
-                : undefined
             return {
               bot,
-              participants: [
-                ...new Map(
-                  [...participants, ...(incomingParticipant ? [incomingParticipant] : []), bot].map((p) => [p.id, p]),
-                ).values(),
-              ],
+              participants: [...new Map([...participants, bot].map((p) => [p.id, p])).values()],
               messages,
               direct: session.isDirect,
+              ...(quotedSenderId === undefined ? {} : { quotedBot: quotedSenderId === session.selfId }),
             }
           }),
           // 原生发送无法中途撤销：等待当前发送与历史写入落定后再响应中断，下一动作仍可被取消。

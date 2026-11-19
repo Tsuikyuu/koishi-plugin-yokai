@@ -93,6 +93,12 @@ export const AppConfig = Schema.Struct({
   roleplay: Schema.Struct({
     character: CharacterId,
     routineEnabled: Schema.optionalKey(Schema.Boolean),
+    triggerOnAt: Schema.optionalKey(Schema.Boolean),
+    triggerOnQuote: Schema.optionalKey(Schema.Boolean),
+    triggerOnName: Schema.optionalKey(Schema.Boolean),
+    triggerOnNamePrefix: Schema.optionalKey(Schema.Boolean),
+    debounceMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    maxDebounceMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   }),
 })
 export type AppConfig = typeof AppConfig.Type

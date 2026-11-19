@@ -12,13 +12,16 @@ import {
 } from "effect"
 import { Universal, type Context, type Session } from "koishi"
 import type { Config } from "../config/schema"
+import type { ConfigurationError } from "../config/error"
 import { resolveConfig, resolveModel } from "../config/resolve"
 import { ChannelRoleplay, type ChannelReplyError } from "../dialogue/dialogue"
 import { ChannelRoleplayLive } from "../dialogue/execute"
+import { makeChannelCoordinator } from "../dialogue/channel-coordinator"
+import { matchesGroupTrigger } from "../dialogue/match-trigger"
 import { ChannelStore, ChannelStoreError } from "../channels/store"
 import { ChannelMediaStore } from "../channels/media"
 import { channelMediaStoreFile } from "../channels/file-media"
-import { makeChannelLock } from "../channels/lock"
+import type { KoishiHistoryError } from "../channels/history"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutinesLive } from "../characters/generated-routines"
 import { CharacterRoutines } from "../characters/routines"
@@ -99,16 +102,16 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       const triggers = yield* Layer.build(ChannelTriggersLive)
       const triggerService = yield* ChannelTriggers.pipe(Effect.provideContext(triggers))
       const history = yield* createKoishiHistory(ctx, databaseGate.withPermit, media)
-      const withChannel = yield* makeChannelLock
+      const run = yield* FiberSet.makeRuntime()
 
-      // 频道锁内创建本轮模型与角色目录快照，文件预设每轮重新读取。
+      // 每轮创建当前模型与角色目录快照，文件预设每轮重新读取。
       const execute = <A>(
         session: Session,
-        run: (service: ChannelRoleplay["Service"]) => Effect.Effect<A, ChannelReplyError>,
+        runTurn: (service: ChannelRoleplay["Service"]) => Effect.Effect<A, ChannelReplyError>,
       ) =>
         Effect.gen(function* () {
           const model = yield* modelLayer
-          const roleplay = ChannelRoleplayLive(config.timezone, routines).pipe(
+          const roleplay = ChannelRoleplayLive(config.timezone, routines, config.triggers).pipe(
             Layer.provide(
               Layer.mergeAll(
                 model,
@@ -118,41 +121,110 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
               ),
             ),
           )
-          return yield* Effect.flatMap(ChannelRoleplay, run).pipe(
+          return yield* Effect.flatMap(ChannelRoleplay, runTurn).pipe(
             Effect.provide(roleplay),
             Effect.provideContext(triggers),
             Effect.provideContext(base),
           )
         })
 
-      // 由 Koishi 中间件调用：过滤器、自身消息、频道建档与受理人判断已由框架完成。
+      const coordinator = yield* makeChannelCoordinator<
+        Session,
+        ConfigurationError | ChannelReplyError | KoishiHistoryError
+      >(
+        config.debounce,
+        {
+          runMessage: (batch, tryEnterCommit) =>
+            Effect.gen(function* () {
+              const result = yield* execute(batch.context, (roleplay) =>
+                roleplay.reply({
+                  key: batch.key,
+                  presetId: batch.presetId,
+                  incoming: batch.messages,
+                  observed: { ...(batch.reason === undefined ? {} : { reason: batch.reason }) },
+                  tryEnterCommit,
+                }),
+              )
+              yield* Effect.logDebug(
+                `消息回合完成，合并消息 ${batch.messages.length} 条，执行动作 ${result.actionsExecuted} 个`,
+              )
+            }).pipe(
+              Effect.catchCause(report),
+              Effect.withLogSpan("turn"),
+              Effect.annotateLogs({ channel: channelIdOf(batch.key), trigger: "message" }),
+            ),
+          runProactive: (trigger, tryEnterCommit) =>
+            Effect.gen(function* () {
+              const session = yield* history.sessionFor(trigger.channel)
+              if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
+              const result = yield* execute(session, (roleplay) => roleplay.proactive(trigger, { tryEnterCommit }))
+              yield* Effect.logDebug(`主动回合完成，执行动作 ${result.actionsExecuted} 个`)
+            }).pipe(
+              Effect.catchCause(report),
+              Effect.withLogSpan("turn"),
+              Effect.annotateLogs({ channel: channelIdOf(trigger.channel), trigger: "next-reply" }),
+            ),
+          runScheduled: (task) =>
+            Effect.gen(function* () {
+              const payload = yield* Schema.decodeUnknownEffect(WakeUpReplyPayload)(task.payload).pipe(
+                Effect.mapError(() => new InvalidReply({ reason: "无法识别的主动唤醒任务" })),
+              )
+              const session = yield* history.sessionFor(payload)
+              if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
+              const result = yield* execute(session, (roleplay) => roleplay.scheduled(task))
+              yield* Effect.logDebug(
+                result === undefined ? "定时任务已失效，未执行" : `定时回合完成，执行动作 ${result.actionsExecuted} 个`,
+              )
+            }).pipe(
+              Effect.withLogSpan("turn"),
+              Effect.annotateLogs({ trigger: "schedule" }),
+            ),
+        },
+        (effect) => Effect.sync(() => run(effect)),
+      )
+
+      // 由 Koishi 中间件调用：入站消息立即落库，再交由单频道协调器防抖合并或静默跳过。
       const receive = Effect.fn("Yokai.receive")(function* (session: Session) {
         const key = keyOf(session)
         yield* Effect.logDebug(
           `收到消息 message=${session.messageId} user=${session.userId} direct=${session.isDirect}：${session.content}`,
         )
         if (!key) return yield* Effect.logDebug("会话缺少平台或频道标识，忽略")
-        yield* Effect.logDebug("等待频道锁")
-        yield* withChannel(
-          channelIdOf(key),
-          Effect.gen(function* () {
-            yield* Effect.logDebug("已获取频道锁")
-            // Koishi 只为群聊建档；私聊按同一规则（autoAssign）补建频道记录。
-            if (session.isDirect) {
-              yield* Effect.tryPromise({
-                try: () => session.getChannel(key.channelId, ["assignee"]),
-                catch: () => new ChannelStoreError({ operation: "attach" }),
-              })
-              yield* Effect.logDebug("私聊频道记录已就绪")
-            }
-            const received = yield* history.recordIncoming(session)
-            if (!received) return yield* Effect.logDebug("消息未写入历史（无文本或重复事件），跳过本轮")
-            const result = yield* execute(session, (roleplay) =>
-              roleplay.reply({ ...received, presetId: config.characterId }),
-            )
-            yield* Effect.logDebug(`消息回合完成，执行动作 ${result.actionsExecuted} 个`)
-          }),
-        )
+        // Koishi 只为群聊建档；私聊按同一规则（autoAssign）补建频道记录。
+        if (session.isDirect) {
+          yield* Effect.tryPromise({
+            try: () => session.getChannel(key.channelId, ["assignee"]),
+            catch: () => new ChannelStoreError({ operation: "attach" }),
+          })
+          yield* Effect.logDebug("私聊频道记录已就绪")
+        }
+        const received = yield* history.recordIncoming(session)
+        if (!received) return yield* Effect.logDebug("消息未写入历史（无文本或重复事件），跳过本轮")
+        const now = Date.now()
+        const reason = yield* triggerService.observeAndMatch(key, received.incoming, now)
+        if (reason !== undefined) yield* Effect.logDebug(`消息命中短期唤醒条件：${reason}`)
+        let triggered = received.direct || reason !== undefined
+        if (!triggered) {
+          const existing = yield* channels.find(key)
+          const preset = yield* Effect.flatMap(CharacterCatalog, (service) =>
+            service.get(existing?.presetId ?? config.characterId),
+          ).pipe(Effect.provide(catalog()))
+          triggered = matchesGroupTrigger(
+            config.triggers,
+            received.incoming,
+            { botId: received.botId, quotedBot: received.quotedBot },
+            preset.character,
+          )
+        }
+        yield* coordinator.submitMessage({
+          key,
+          presetId: config.characterId,
+          context: session,
+          message: received.incoming,
+          triggered,
+          ...(reason === undefined ? {} : { reason }),
+          now,
+        })
       })
 
       const dispatch = Effect.fn("Yokai.dispatch")(function* (task: ScheduleTask) {
@@ -160,19 +232,8 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           Effect.mapError(() => new InvalidReply({ reason: "无法识别的主动唤醒任务" })),
         )
         yield* Effect.logDebug(`定时任务 ${task.id} 到期：${payload.text}`)
-        yield* withChannel(
-          channelIdOf(payload),
-          Effect.gen(function* () {
-            const session = yield* history.sessionFor(payload)
-            if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
-            const result = yield* execute(session, (roleplay) => roleplay.scheduled(task))
-            yield* Effect.logDebug(
-              result === undefined ? "定时任务已失效，未执行" : `定时回合完成，执行动作 ${result.actionsExecuted} 个`,
-            )
-          }),
-        ).pipe(
-          Effect.withLogSpan("turn"),
-          Effect.annotateLogs({ channel: channelIdOf(payload), trigger: "schedule" }),
+        yield* coordinator.submitScheduled(payload, task).pipe(
+          Effect.annotateLogs({ channel: channelIdOf(payload) }),
         )
       })
 
@@ -187,26 +248,13 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           (trigger) =>
             Effect.gen(function* () {
               yield* Effect.logDebug(`短期唤醒条件满足：${trigger.reason}`)
-              yield* withChannel(
-                channelIdOf(trigger.channel),
-                Effect.gen(function* () {
-                  const session = yield* history.sessionFor(trigger.channel)
-                  if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
-                  const result = yield* execute(session, (roleplay) => roleplay.proactive(trigger))
-                  yield* Effect.logDebug(`主动回合完成，执行动作 ${result.actionsExecuted} 个`)
-                }),
-              )
-            }).pipe(
-              Effect.catchCause(report),
-              Effect.withLogSpan("turn"),
-              Effect.annotateLogs({ channel: channelIdOf(trigger.channel), trigger: "next-reply" }),
-            ),
+              yield* coordinator.submitProactive(trigger)
+            }).pipe(Effect.catchCause(report)),
           { concurrency: "unbounded", discard: true },
         )
       })
       const schedulePass = yield* Semaphore.make(1)
       const proactivePass = yield* Semaphore.make(1)
-      const run = yield* FiberSet.makeRuntime()
       // 监听与时钟归当前 ctx；额外 finalizer 也覆盖初始化失败时的回收。
       yield* Effect.acquireRelease(
         Effect.sync(() =>

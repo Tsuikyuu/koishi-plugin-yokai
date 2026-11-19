@@ -27,10 +27,16 @@ export const selectImages = (
 ): ReadonlyArray<ImageCandidate> => {
   const queue: Message[] = []
   if (trigger.type === "message") {
-    queue.push(trigger.message)
-    const quote = trigger.message.quote
-    const quoted = quote === undefined ? undefined : history.messages.find((message) => message.id === quote)
-    if (quoted !== undefined) queue.push(quoted)
+    const incomingById = new Map(trigger.messages.map((message) => [message.id, message]))
+    for (const message of [...trigger.messages].reverse()) {
+      queue.push(message)
+      const quote = message.quote
+      const quoted =
+        quote === undefined
+          ? undefined
+          : (incomingById.get(quote) ?? history.messages.find((message) => message.id === quote))
+      if (quoted !== undefined) queue.push(quoted)
+    }
   }
   queue.push(...[...history.messages].reverse())
 

@@ -23,7 +23,7 @@ export const buildChannelContext: ChannelContextBuilder = ({
   const time = now
   const triggerXml =
     trigger.type === "message"
-      ? `<trigger reason="${escapeXml(trigger.reason ?? "message")}" messageid="${escapeXml(trigger.message.id)}">${escapeXml(trigger.reason ?? "")}</trigger>`
+      ? `<trigger reason="${escapeXml(trigger.reason ?? "message")}" messageid="${escapeXml(trigger.messages[0].id)}">${escapeXml(trigger.reason ?? "")}</trigger>`
       : trigger.type === "schedule"
         ? `<trigger reason="wake-up" scheduleid="${escapeXml(trigger.run.scheduleId)}" scheduled_at="${trigger.run.scheduledAt.getTime()}">${escapeXml(trigger.text)}</trigger>`
         : `<trigger reason="next-reply" time="${trigger.time}">${escapeXml(trigger.reason)}</trigger>`
@@ -32,7 +32,7 @@ export const buildChannelContext: ChannelContextBuilder = ({
     stickers.map((sticker) => [sticker.sha256, { id: sticker.id, summary: sticker.summary }]),
   )
   const known = new Map(
-    [...history.messages, ...(trigger.type === "message" ? [trigger.message] : [])].map((message) => [
+    [...history.messages, ...(trigger.type === "message" ? trigger.messages : [])].map((message) => [
       message.id,
       message,
     ]),
@@ -71,7 +71,10 @@ export const buildChannelContext: ChannelContextBuilder = ({
     "# 平台历史",
     `<history>${history.messages.map((message) => messageXml(message, refs, knownStickers)).join("\n")}</history>`,
     ...(trigger.type === "message"
-      ? ["# 本次触发消息", `<incoming>${messageXml(trigger.message, refs, knownStickers)}</incoming>`]
+      ? [
+          "# 本次触发消息",
+          `<incoming>${trigger.messages.map((message) => messageXml(message, refs, knownStickers)).join("\n")}</incoming>`,
+        ]
       : trigger.type === "schedule"
         ? ["# 本次定时触发", "你安排的事情到时间了，具体内容见 trigger。请结合当前情境决定是否发言。"]
         : ["# 本次短期唤醒", "你之前设置的短期条件已满足，具体内容见 trigger。请结合当前情境决定是否发言。"]),

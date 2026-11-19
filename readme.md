@@ -15,8 +15,14 @@ Koishi AI 角色扮演插件。
 | `models.default`          | `deepseek/deepseek-chat`       | 当前使用的模型（`provider/model`）                      |
 | `characters.directory`    | `characters`                   | 角色预设目录（相对于 `data/yokai/`）                    |
 | `characters.presets`      | `{ companion: companion.yml }` | 角色 ID 到 YAML 文件相对路径的映射                      |
-| `roleplay.character`      | `companion`                    | 新频道首次触发时绑定的默认角色 ID（已有频道保持原绑定） |
-| `roleplay.routineEnabled` | `true`                         | 是否在启动时生成角色日常作息并在对话中启用日程          |
+| `roleplay.character`           | `companion`                    | 新频道首次触发时绑定的默认角色 ID（已有频道保持原绑定） |
+| `roleplay.routineEnabled`      | `true`                         | 是否在启动时生成角色日常作息并在对话中启用日程          |
+| `roleplay.triggerOnAt`         | `true`                         | 群聊中 `@` 机器人时是否触发生成                         |
+| `roleplay.triggerOnQuote`      | `true`                         | 群聊中引用机器人消息时是否触发生成                      |
+| `roleplay.triggerOnName`       | `true`                         | 群聊消息中包含角色名称或别名时是否触发生成              |
+| `roleplay.triggerOnNamePrefix` | `true`                         | 群聊消息以角色名称或别名开头时是否触发生成              |
+| `roleplay.debounceMs`          | `2000`                         | 定向对话时等待提及者把话说完的防抖时间（毫秒，0 关闭）  |
+| `roleplay.maxDebounceMs`       | `8000`                         | 单轮防抖合并的最长等待时间（毫秒）                      |
 
 ### 模型供应商可选参数
 

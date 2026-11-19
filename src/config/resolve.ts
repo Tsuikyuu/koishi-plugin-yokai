@@ -58,12 +58,27 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
     return yield* Effect.fail(fail("roleplay.character", "未找到默认角色预设"))
   }
   yield* Effect.forEach(entries, ([id, file]) => resolvePresetPath(directory, file, id))
+  const debounceMs = config.roleplay.debounceMs ?? 2000
+  const maxDebounceMs = config.roleplay.maxDebounceMs ?? Math.max(8000, debounceMs)
+  if (maxDebounceMs < debounceMs) {
+    return yield* Effect.fail(fail("roleplay.maxDebounceMs", "最长防抖等待时间不能小于防抖时间"))
+  }
   return {
     dataDirectory,
     directory,
     presets: new Map(entries),
     characterId: config.roleplay.character,
     routineEnabled: config.roleplay.routineEnabled ?? true,
+    triggers: {
+      at: config.roleplay.triggerOnAt ?? true,
+      quote: config.roleplay.triggerOnQuote ?? true,
+      nameContains: config.roleplay.triggerOnName ?? true,
+      namePrefix: config.roleplay.triggerOnNamePrefix ?? true,
+    },
+    debounce: {
+      debounceMs,
+      maxDebounceMs,
+    },
     timezone: config.timezone ?? "Asia/Shanghai",
   }
 })

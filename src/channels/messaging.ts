@@ -10,9 +10,15 @@ export interface ChannelHistory {
   readonly messages: ReadonlyArray<Message>
   // 私聊不提供 @ 提及。
   readonly direct: boolean
+  // 触发消息存在引用时，标识被引用消息是否由当前机器人发出。
+  readonly quotedBot?: boolean
 }
 export type ChannelHistoryQuery =
-  | { readonly beforeMessageId: MessageId; readonly limit: number }
+  | {
+      readonly beforeMessageId: MessageId
+      readonly incomingIds?: ReadonlyArray<MessageId>
+      readonly limit: number
+    }
   | { readonly beforeTime: number; readonly limit: number }
 
 export class ChannelPlatformError extends Data.TaggedError("ChannelPlatformError")<{

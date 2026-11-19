@@ -95,6 +95,24 @@ export const Config: Schema<any, Config> = Schema.intersect([
       routineEnabled: Schema.boolean()
         .default(true)
         .description("启用角色日程：启动时生成日常时间表，并在对话中拼装日程上下文和提供日程调整动作"),
+      triggerOnAt: Schema.boolean()
+        .default(true)
+        .description("群聊中 @ 机器人时触发生成"),
+      triggerOnQuote: Schema.boolean()
+        .default(true)
+        .description("群聊中引用机器人消息时触发生成"),
+      triggerOnName: Schema.boolean()
+        .default(true)
+        .description("群聊消息中包含角色名称或别名时触发生成"),
+      triggerOnNamePrefix: Schema.boolean()
+        .default(true)
+        .description("群聊消息以角色名称或别名开头时触发生成"),
+      debounceMs: Schema.natural()
+        .default(2000)
+        .description("被提及或对话跟进时等待目标群友把话说完的防抖时间（毫秒），0 表示关闭防抖"),
+      maxDebounceMs: Schema.natural()
+        .default(8000)
+        .description("单轮防抖合并的最长等待时间（毫秒）"),
     }),
   }).description("角色文件"),
 ])

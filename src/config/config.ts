@@ -16,5 +16,11 @@ export interface Config {
   readonly roleplay: {
     readonly character: string
     readonly routineEnabled?: boolean
+    readonly triggerOnAt?: boolean
+    readonly triggerOnQuote?: boolean
+    readonly triggerOnName?: boolean
+    readonly triggerOnNamePrefix?: boolean
+    readonly debounceMs?: number
+    readonly maxDebounceMs?: number
   }
 }

@@ -27,6 +27,51 @@ test("Koishi config keeps file references and resolves files only beneath data/y
     const reactive = new Proxy(raw, { ownKeys: () => [], has: () => false, getOwnPropertyDescriptor: () => undefined })
     const resolved = await Effect.runPromise(resolveConfig(reactive, root))
     assert.equal(resolved.directory, join(root, "data/yokai/characters"))
+    assert.deepEqual(resolved.triggers, {
+      at: true,
+      quote: true,
+      nameContains: true,
+      namePrefix: true,
+    })
+    assert.deepEqual(resolved.debounce, {
+      debounceMs: 2000,
+      maxDebounceMs: 8000,
+    })
+    const customized = await Effect.runPromise(
+      resolveConfig(
+        Config({
+          ...config,
+          roleplay: {
+            character: "companion",
+            triggerOnAt: true,
+            triggerOnQuote: false,
+            triggerOnName: false,
+            triggerOnNamePrefix: true,
+            debounceMs: 1500,
+            maxDebounceMs: 6000,
+          },
+        }),
+        root,
+      ),
+    )
+    assert.deepEqual(customized.triggers, {
+      at: true,
+      quote: false,
+      nameContains: false,
+      namePrefix: true,
+    })
+    assert.deepEqual(customized.debounce, {
+      debounceMs: 1500,
+      maxDebounceMs: 6000,
+    })
+    assert.equal(
+      (
+        await Effect.runPromiseExit(
+          resolveConfig({ ...config, roleplay: { character: "companion", debounceMs: 5000, maxDebounceMs: 1000 } }, root),
+        )
+      )._tag,
+      "Failure",
+    )
     for (const invalid of [
       { ...config, timezone: "Invalid/Zone" },
       { ...config, roleplay: { character: "missing" } },

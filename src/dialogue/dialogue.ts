@@ -58,9 +58,11 @@ export class ChannelRoleplay extends Context.Service<
     readonly reply: (input: {
       readonly key: ChannelKey
       readonly presetId: CharacterId
-      readonly incoming: Message
+      readonly incoming: Message | readonly [Message, ...Message[]]
+      readonly observed?: { readonly reason?: string }
+      readonly tryEnterCommit?: Effect.Effect<boolean>
     }) => Effect.Effect<{ readonly actionsExecuted: number }, ChannelReplyError>
-    // 频道任务处理器：获取频道锁后调用 Scheduler，旧快照或已暂停/删除任务不执行。
+    // 频道定时任务处理器：调用 Scheduler 认领并执行，旧快照或已暂停/删除任务不执行。
     readonly scheduled: (
       task: ScheduleTask,
     ) => Effect.Effect<
@@ -69,6 +71,7 @@ export class ChannelRoleplay extends Context.Service<
     >
     readonly proactive: (
       trigger: ProactiveTrigger,
+      options?: { readonly tryEnterCommit?: Effect.Effect<boolean> },
     ) => Effect.Effect<{ readonly actionsExecuted: number }, ChannelReplyError>
   }
 >()("yokai/dialogue/ChannelRoleplay") {}

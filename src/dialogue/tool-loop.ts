@@ -23,6 +23,7 @@ export const generateChannelResponse = Effect.fn("generateChannelResponse")(func
   context: ModelInput,
   initialNoteIds: ReadonlyArray<NoteId>,
   timezone: string,
+  tryEnterCommit?: Effect.Effect<boolean>,
 ) {
   const model = yield* ModelGateway
   const notebook = yield* NotebookStore
@@ -54,6 +55,13 @@ export const generateChannelResponse = Effect.fn("generateChannelResponse")(func
         return { type: "notebook" as const, call, queries: args.queries }
       }),
     )
+    if (
+      tryEnterCommit !== undefined &&
+      calls.some((item) => item.type === "wake-up" && item.args.operation !== "query")
+    ) {
+      const allowed = yield* tryEnterCommit
+      if (!allowed) return undefined
+    }
     const results = yield* Effect.forEach(calls, (item) =>
       Effect.gen(function* () {
         if (item.type === "wake-up")
