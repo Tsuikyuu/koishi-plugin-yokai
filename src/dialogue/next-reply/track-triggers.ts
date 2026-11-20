@@ -1,7 +1,7 @@
 import { Effect, Layer, Ref } from "effect"
 import { channelIdOf, type ChannelId, type ChannelKey } from "../../channels/channel"
 import type { Message } from "../../channels/message"
-import type { NextReplyAction } from "./action"
+import { NextReplyTtlMs, type NextReplyAction } from "./action"
 import { ChannelTriggers, type ProactiveTrigger } from "./triggers"
 
 interface State {
@@ -11,6 +11,9 @@ interface State {
   readonly lastMessageAt: number
   readonly lastMessageAtByUser: Readonly<Record<string, number>>
 }
+
+const expiresAt = (state: State) => state.registeredAt + NextReplyTtlMs
+const isExpired = (state: State, now: number) => now >= expiresAt(state)
 
 const groups = (actions: ReadonlyArray<NextReplyAction>) => {
   const result = new Map<string, NextReplyAction[]>()
@@ -44,8 +47,9 @@ const matchMessage = (state: State, message: Message) =>
     ),
   )
 
-const matchSilence = (state: State, now: number) =>
-  groups(state.pending).find((actions) =>
+const matchSilence = (state: State, now: number) => {
+  const deadline = expiresAt(state)
+  return groups(state.pending).find((actions) =>
     actions.every((action) => {
       if (action.condition === "message_from_user") {
         return action.userId === "all"
@@ -53,12 +57,17 @@ const matchSilence = (state: State, now: number) =>
           : (state.lastMessageAtByUser[action.userId] ?? 0) >= state.registeredAt
       }
       if (action.seconds === undefined) return false
-      if (action.maxWaitSeconds !== undefined && now - state.registeredAt >= action.maxWaitSeconds * 1000) return true
+      if (action.maxWaitSeconds !== undefined) {
+        const maxAt = state.registeredAt + action.maxWaitSeconds * 1000
+        if (maxAt <= deadline && now >= maxAt) return true
+      }
       const lastMessageAt = action.userId === "all" ? state.lastMessageAt : state.lastMessageAtByUser[action.userId]
       if (lastMessageAt === undefined) return false
-      return now - lastMessageAt >= action.seconds * 1000
+      const fireAt = lastMessageAt + action.seconds * 1000
+      return fireAt <= deadline && now >= fireAt
     }),
   )
+}
 
 export const ChannelTriggersLive = Layer.effect(
   ChannelTriggers,
@@ -70,6 +79,11 @@ export const ChannelTriggersLive = Layer.effect(
           const channelId = channelIdOf(channel)
           const state = all.get(channelId)
           if (state === undefined) return [undefined, all] as const
+          if (isExpired(state, now)) {
+            const next = new Map(all)
+            next.delete(channelId)
+            return [undefined, next] as const
+          }
           const updated: State = {
             ...state,
             lastMessageAt: now,
@@ -103,9 +117,14 @@ export const ChannelTriggersLive = Layer.effect(
           const next = new Map(all)
           for (const [channelId, state] of all) {
             const matched = matchSilence(state, now)
-            if (matched === undefined) continue
-            triggers.push({ channel: state.channel, reason: describe(matched), time: now })
-            next.delete(channelId)
+            if (matched !== undefined) {
+              triggers.push({ channel: state.channel, reason: describe(matched), time: now })
+              next.delete(channelId)
+              continue
+            }
+            if (isExpired(state, now)) {
+              next.delete(channelId)
+            }
           }
           return [triggers, next] as const
         }),
