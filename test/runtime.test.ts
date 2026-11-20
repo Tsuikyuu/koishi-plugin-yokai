@@ -1096,3 +1096,93 @@ test(
     assert.equal(f.ctx.logger("yokai").level, initialLevel)
   },
 )
+
+test(
+  "malformed XML bounces back with a protocol receipt for rewrite up to retry cap without leaking diagnostics to history",
+  { timeout: 15000 },
+  async (t) => {
+    const f = await fixture(t)
+    await f.ctx.database.createChannel("lifecycle-test", "room", { assignee: "bot", guildId: "guild" })
+    const fork = f.ctx.plugin(yokai, {
+      ...f.config,
+      roleplay: {
+        character: "companion",
+        routineEnabled: false,
+        debounceMs: 0,
+      },
+    })
+    assert.ok(fork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+
+    // 1. 漏写开头的 <response> 根标签：首次被打回并附上原草稿与协议回执，第二次补全后正常发出消息
+    let stageOneAttempt = 0
+    f.handleReplies((call) => {
+      stageOneAttempt += 1
+      if (stageOneAttempt === 1) {
+        complete(
+          call,
+          "<think>想吐槽他在炼丹</think><actions><message>14个参数你在炼丹</message></actions></response>",
+        )
+        return
+      }
+      complete(
+        call,
+        "<response><think>想吐槽他在炼丹</think><actions><message>14个参数你在炼丹</message></actions></response>",
+      )
+    })
+
+    await f.receive("Yokai 帮我测一下")
+    assert.equal(f.calls.length, 2)
+    assert.deepEqual(f.sent, ["14个参数你在炼丹"])
+
+    const secondCallMessages = f.calls[1]?.body.messages ?? []
+    const echoedDraft = secondCallMessages.at(-2)
+    const receiptMsg = secondCallMessages.at(-1)
+    assert.equal(echoedDraft?.role, "assistant")
+    assert.match(echoedDraft?.content ?? "", /^<think>想吐槽他在炼丹<\/think>/)
+    assert.equal(receiptMsg?.role, "user")
+    assert.match(receiptMsg?.content ?? "", /<protocol-receipt status="rejected">/)
+    assert.match(receiptMsg?.content ?? "", /缺少 &lt;response&gt; 根元素/)
+
+    // 平台历史只包含真实参与者消息与最终发出的角色回复，不混入协议回执或废稿
+    const historyAfterFix = await f.ctx.database.get("yokai_history", {})
+    assert.equal(historyAfterFix.some((row) => row.text.includes("protocol-receipt")), false)
+    assert.equal(historyAfterFix.length, 2)
+
+    // 2. 结构错误（如将 <next-reply /> 误写进 <actions> 内）：打回修正位置后正常执行
+    let stageTwoAttempt = 0
+    f.handleReplies((call) => {
+      stageTwoAttempt += 1
+      if (stageTwoAttempt === 1) {
+        complete(
+          call,
+          '<response><think/><actions><message>等你回话</message><next-reply type="message_from_user" user_id="human" /></actions></response>',
+        )
+        return
+      }
+      complete(
+        call,
+        '<response><think/><actions><message>等你回话</message></actions><next-reply type="message_from_user" user_id="human" /></response>',
+      )
+    })
+
+    await f.receive("Yokai 聊两句")
+    assert.equal(stageTwoAttempt, 2)
+    assert.deepEqual(f.sent, ["14个参数你在炼丹", "等你回话"])
+
+    // 3. 连续解析失败达到重试上限（1 次首调 + 2 次打回 = 共 3 次调用）后中止，不死循环
+    let stageThreeAttempt = 0
+    f.handleReplies((call) => {
+      stageThreeAttempt += 1
+      complete(call, "<think>始终漏写根元素</think><actions><message>不该发出</message></actions></response>")
+    })
+
+    await f.receive("Yokai 再试一次")
+    assert.equal(stageThreeAttempt, 3)
+    assert.deepEqual(f.sent, ["14个参数你在炼丹", "等你回话"])
+
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+  },
+)

@@ -23,7 +23,6 @@ import { Scheduler } from "../scheduling/scheduler"
 import { WakeUpReplyPayload } from "./tools/wake-up-payload"
 import { initializeChannel, validateChannelPresets } from "../channels/initialize"
 import { buildChannelContext } from "./context/build-context"
-import { parseChannelResponse } from "./response/parse-xml"
 import { executeNoteAction, loadRecentNotes } from "../notebook/execute-actions"
 import { generateChannelResponse } from "./tool-loop"
 import { countAvailableImages, loadImageAttachments } from "./context/attachments"
@@ -163,7 +162,7 @@ export const ChannelRoleplayLive = (
           return { actionsExecuted: 0, spoke: false }
         }
         yield* Effect.logDebug(`模型最终输出：\n${output.text}`)
-        const response = yield* parseChannelResponse(output.text)
+        const response = output.response
         const messageIds = new Set([
           ...history.messages.map((message) => message.id),
           ...(trigger.type === "message" ? trigger.messages.map((message) => message.id) : []),
