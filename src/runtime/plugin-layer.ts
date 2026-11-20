@@ -72,13 +72,16 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         const selected = yield* resolveModel(raw.models)
         const imageInput = (yield* Ref.get(imageSupport)).get(`${selected.provider}/${selected.model}`) ?? true
         const capabilities = { imageInput }
-        const gateway =
+        const providerGateway = (
           selected.provider === "deepseek"
             ? ModelGatewayDeepSeek(selected, capabilities)
             : selected.provider === "gemini"
               ? ModelGatewayGemini(selected, capabilities)
               : ModelGatewayOpenAI(selected, capabilities)
-        return ModelGatewayRecorded(selected.model).pipe(Layer.provide(gateway.pipe(Layer.provide(http))))
+        ).pipe(Layer.provide(http))
+        return raw.debug === true
+          ? ModelGatewayRecorded(selected.model).pipe(Layer.provide(providerGateway))
+          : providerGateway
       })
       const channels = yield* ChannelStore.pipe(Effect.provideContext(base))
       const presets = yield* Effect.gen(function* () {
@@ -393,5 +396,5 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         ),
         (dispose) => Effect.sync(dispose),
       )
-    }).pipe(Effect.provide(loggerLayer(ctx))),
-  )
+    }),
+  ).pipe(Layer.provide(loggerLayer(ctx, raw)))

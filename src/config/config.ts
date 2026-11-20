@@ -2,6 +2,7 @@ import type { DeepSeekProviderConfig, GeminiProviderConfig, OpenAIProviderConfig
 
 export interface Config {
   readonly version: 1
+  readonly debug?: boolean
   readonly timezone: string
   readonly models: {
     readonly default: string

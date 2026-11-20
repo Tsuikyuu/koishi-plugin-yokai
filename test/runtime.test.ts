@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test, { type TestContext } from "node:test"
 import SQLite from "@koishijs/plugin-database-sqlite"
-import { Bot, Context, h, HTTP, Universal } from "koishi"
+import { Bot, Context, h, HTTP, Logger, Universal } from "koishi"
 import { Schema } from "effect"
 import { stringify } from "yaml"
 import * as yokai from "../src/index"
@@ -1017,5 +1017,77 @@ test(
 
     fork.dispose()
     await f.ctx.lifecycle.flush()
+  },
+)
+
+test(
+  "debug mode defaults to false without debug logs or trace files, and toggling debug controls both",
+  { timeout: 10000 },
+  async (t) => {
+    const f = await fixture(t)
+    await f.ctx.database.createChannel("lifecycle-test", "room", { assignee: "bot", guildId: "guild" })
+    const debugRecords: string[] = []
+    const target: Logger.Target = {
+      record(record) {
+        if (record.name === "yokai" && record.type === "debug") {
+          debugRecords.push(record.content)
+        }
+      },
+    }
+    Logger.targets.push(target)
+    const initialLevel = f.ctx.logger("yokai").level
+    t.after(() => {
+      const index = Logger.targets.indexOf(target)
+      if (index >= 0) Logger.targets.splice(index, 1)
+    })
+
+    const logsDir = join(f.ctx.baseDir, "data/yokai/logs")
+    const listTraceDirs = async (): Promise<string[]> => {
+      try {
+        return await readdir(logsDir)
+      } catch {
+        return []
+      }
+    }
+
+    // 1. 默认关闭 debug：正常回复，但不输出任何 debug 日志，也不在 logs 目录写入文件
+    const baseConfig: Config = {
+      ...f.config,
+      roleplay: { ...f.config.roleplay, routineEnabled: false },
+    }
+    const fork = f.ctx.plugin(yokai, baseConfig)
+    await f.ctx.lifecycle.flush()
+
+    await f.receive("first")
+    assert.equal(f.sent.length, 1)
+    assert.equal(debugRecords.length, 0)
+    assert.deepEqual(await listTraceDirs(), [])
+
+    // 2. 开启 debug：自动输出 debug 日志（含模型最终输出），并在 logs 目录保存调用记录
+    fork.update({ ...baseConfig, debug: true })
+    await f.ctx.lifecycle.flush()
+
+    await f.receive("second")
+    assert.equal(f.sent.length, 2)
+    assert.ok(debugRecords.some((line) => line.includes("回合开始")))
+    assert.ok(debugRecords.some((line) => line.includes("模型最终输出：")))
+    const tracesAfterEnable = await listTraceDirs()
+    assert.equal(tracesAfterEnable.length, 1)
+    const traceFiles = await readdir(join(logsDir, tracesAfterEnable[0]!))
+    assert.deepEqual([...traceFiles].sort(), ["input.json", "result.json"])
+
+    // 3. 重新关闭 debug：不再输出新的 debug 日志，也不再新增调用记录文件
+    debugRecords.length = 0
+    fork.update({ ...baseConfig, debug: false })
+    await f.ctx.lifecycle.flush()
+
+    await f.receive("enabled")
+    assert.equal(f.sent.length, 3)
+    assert.equal(debugRecords.length, 0)
+    assert.deepEqual(await listTraceDirs(), tracesAfterEnable)
+
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+    assert.equal(f.ctx.logger("yokai").level, initialLevel)
   },
 )

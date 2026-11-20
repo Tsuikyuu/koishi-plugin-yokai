@@ -22,6 +22,9 @@ const provider = {
 export const Config: Schema<any, Config> = Schema.intersect([
   Schema.object({
     version: Schema.const(1).default(1).hidden(),
+    debug: Schema.boolean()
+      .default(false)
+      .description("启用调试模式：输出调试日志，并将每次模型调用记录保存到 data/yokai/logs"),
     timezone: Schema.string().default("Asia/Shanghai").description("角色日程和新建定时任务的 IANA 时区"),
     models: Schema.object({
       default: Schema.dynamic(ModelSchemaName)

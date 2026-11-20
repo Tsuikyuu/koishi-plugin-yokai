@@ -21,11 +21,13 @@ test("Koishi config keeps file references and resolves files only beneath data/y
     await mkdir(join(root, "data/yokai/characters"), { recursive: true })
     await writeFile(join(root, "data/yokai/characters/companion.yml"), "version: 1\n")
     const raw = Config(config)
+    assert.equal(raw.debug, false)
     assert.deepEqual(raw.characters.presets, { companion: "companion.yml" })
     assert.equal("database" in raw, false)
     assert.equal("presets" in raw, false)
     const reactive = new Proxy(raw, { ownKeys: () => [], has: () => false, getOwnPropertyDescriptor: () => undefined })
     const resolved = await Effect.runPromise(resolveConfig(reactive, root))
+    assert.equal(resolved.debug, false)
     assert.equal(resolved.directory, join(root, "data/yokai/characters"))
     assert.deepEqual(resolved.triggers, {
       at: true,
@@ -45,6 +47,7 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       resolveConfig(
         Config({
           ...config,
+          debug: true,
           roleplay: {
             character: "companion",
             triggerOnAt: true,
@@ -60,6 +63,7 @@ test("Koishi config keeps file references and resolves files only beneath data/y
         root,
       ),
     )
+    assert.equal(customized.debug, true)
     assert.deepEqual(customized.triggers, {
       at: true,
       quote: false,

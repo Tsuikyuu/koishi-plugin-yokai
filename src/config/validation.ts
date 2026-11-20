@@ -79,6 +79,7 @@ export type GeminiProviderConfig = typeof GeminiProviderConfig.Type
 
 export const AppConfig = Schema.Struct({
   version: Schema.Literal(1),
+  debug: Schema.optionalKey(Schema.Boolean),
   timezone: Schema.optionalKey(TimeZone),
   models: Schema.Struct({
     default: NonEmpty.check(Schema.isPattern(/^(deepseek|openai|gemini)\/[^\s/]+(?:\/[^\s/]+)*$/)),

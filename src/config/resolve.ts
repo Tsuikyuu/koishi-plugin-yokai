@@ -37,6 +37,7 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
   // Koishi 的响应式配置仅代理属性读取，必须显式取值而不能枚举代理。
   const snapshot = {
     version: raw.version,
+    ...(raw.debug === undefined ? {} : { debug: raw.debug }),
     timezone: raw.timezone,
     models: raw.models,
     characters: raw.characters,
@@ -64,6 +65,7 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
     return yield* Effect.fail(fail("roleplay.maxDebounceMs", "最长防抖等待时间不能小于防抖时间"))
   }
   return {
+    debug: config.debug ?? false,
     dataDirectory,
     directory,
     presets: new Map(entries),

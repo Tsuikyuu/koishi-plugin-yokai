@@ -11,6 +11,7 @@ Koishi AI 角色扮演插件。
 
 | 配置项                    | 默认值                         | 说明                                                    |
 | ------------------------- | ------------------------------ | ------------------------------------------------------- |
+| `debug`                   | `false`                        | 是否开启调试模式（开启后打印调试日志并将模型调用记录写入 `data/yokai/logs`） |
 | `timezone`                | `Asia/Shanghai`                | 角色日程与定时任务使用的 IANA 时区                      |
 | `models.default`          | `deepseek/deepseek-chat`       | 当前使用的模型（`provider/model`）                      |
 | `characters.directory`    | `characters`                   | 角色预设目录（相对于 `data/yokai/`）                    |
@@ -85,7 +86,7 @@ data/yokai/
   characters/   # 角色预设 YAML 文件
   stickers/     # 角色自主收藏的表情包图片（单角色上限 40 张，跨频道互通）
   media/        # 聊天接收的图片缓存（支持 PNG/JPEG/WebP/GIF，单张上限 10 MiB）
-  logs/         # 每次模型调用的输入与输出记录
+  logs/         # 开启 debug 模式时保存每次模型调用的输入与输出记录
 ```
 
 - **图片与表情包**：选用支持图片输入的模型时，角色会自动查看近期聊天图片，并按自身喜好收藏、管理与发送表情包；切换到纯文本模型时自动只读文字，仍可发送已收藏的表情包。
