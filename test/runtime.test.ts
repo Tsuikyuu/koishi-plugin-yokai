@@ -470,7 +470,7 @@ test(
         complete(
           call,
           context.includes("arm-silence")
-            ? '<response><think/><actions><next-reply type="silence" user_id="all" seconds="1" /></actions><status/></response>'
+            ? '<response><think/><actions/><status/><next-reply type="silence" user_id="all" seconds="1" /></response>'
             : "<response><think/><actions/><status/></response>",
         )
       }
@@ -610,7 +610,7 @@ test(
     f.handleReplies((call) =>
       complete(
         call,
-        '<response><think/><actions><next-reply type="message_from_user" user_id="human" /><message>等你下一句</message></actions><status/></response>',
+        '<response><think/><actions><message>等你下一句</message></actions><status/><next-reply type="message_from_user" user_id="human" /></response>',
       ),
     )
     fork.update({
@@ -639,7 +639,7 @@ test(
     f.handleReplies((call) =>
       complete(
         call,
-        '<response><think/><actions><next-reply type="message_from_user" user_id="human" /></actions><status/></response>',
+        '<response><think/><actions/><status/><next-reply type="message_from_user" user_id="human" /></response>',
       ),
     )
     await send({ id: "m-arm-next", content: '<at id="bot"/> 我有话说' })
@@ -671,7 +671,7 @@ test(
     f.handleReplies((call) =>
       complete(
         call,
-        '<response><think/><actions><message>这句不该发出</message><next-reply type="message_from_user" user_id="bot" /></actions><status/></response>',
+        '<response><think/><actions><message>这句不该发出</message></actions><status/><next-reply type="message_from_user" user_id="bot" /></response>',
       ),
     )
     await send({ id: "m-invalid-bot-target", content: "测试填机器人自己ID", direct: true })
@@ -680,7 +680,7 @@ test(
     f.handleReplies((call) =>
       complete(
         call,
-        '<response><think/><actions><message>这句也不该发出</message><next-reply type="message_from_user" user_id="Human" /></actions><status/></response>',
+        '<response><think/><actions><message>这句也不该发出</message></actions><status/><next-reply type="message_from_user" user_id="Human" /></response>',
       ),
     )
     await send({ id: "m-invalid-nickname-target", content: "测试填昵称而非ID", direct: true })
@@ -769,7 +769,7 @@ test(
     )
     complete(
       secondCall,
-      '<response><think/><actions><next-reply type="silence" user_id="all" seconds="1" /><message quote="p3">听完了</message></actions><status/></response>',
+      '<response><think/><actions><message quote="p3">听完了</message></actions><status/><next-reply type="silence" user_id="all" seconds="1" /></response>',
     )
     await Promise.all([partOne, partTwo])
     assert.equal(f.sent.length, 2)
@@ -783,7 +783,7 @@ test(
       } else {
         complete(
           call,
-          '<response><think/><actions><next-reply type="silence" user_id="all" seconds="1" /></actions><status/></response>',
+          '<response><think/><actions/><status/><next-reply type="silence" user_id="all" seconds="1" /></response>',
         )
       }
     })

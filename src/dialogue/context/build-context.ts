@@ -95,7 +95,7 @@ export const buildChannelContext: ChannelContextBuilder = ({
     ...(history.direct
       ? []
       : [
-          "- 群聊里别人后续不 @ 或不叫你名字时默认不会唤醒你；如果这轮你问了对方问题、正在你来我往地聊天尚未收尾、或对方话才说一半，记得在 actions 中加上合适的 <next-reply /> 继续听下一句；若话题已结束则不要加。",
+          "- 群聊里别人后续不 @ 或不叫你名字时默认不会唤醒你；如果这轮你问了对方问题、正在你来我往地聊天尚未收尾、或对方话才说一半，记得在 response 末尾加上合适的 <next-reply /> 继续听下一句；若话题已结束则不要加。",
         ]),
     "- 附带画面的图片以 attached=\"true\" 出现在后续图片片段中；attached=\"false\" 表示你看不到这张图，请忽视，有人问起就说看不到。",
     "- 若要使用与消息ID或参与者ID有关的功能（如 quote、at、next-reply），请仔细核对上下文中的真实 id，切勿填写昵称或机器人自己的 bot_id！",

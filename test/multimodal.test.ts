@@ -247,6 +247,42 @@ test("response protocol parses inline mentions, sticker sends, and sticker manag
   assert.throws(() =>
     decodeChannelResponse('<response><think/><actions><sticker-delete id="sleepy">多余文本</sticker-delete></actions><status/></response>'),
   )
+
+  const withoutStatus = decodeChannelResponse(
+    "<response><think>说嘴硬也对</think><actions><message>嘴硬总比饿硬好</message></actions></response>",
+  )
+  assert.deepEqual(withoutStatus, {
+    think: "说嘴硬也对",
+    actions: [{ type: "message", parts: [{ type: "text", text: "嘴硬总比饿硬好" }] }],
+    status: {},
+    nextReplies: [],
+  })
+  const withStatusAndNextReply = decodeChannelResponse(
+    '<response><think>原来是ID</think><actions><message>原来是ID啊</message></actions><status><emotion>恍然</emotion></status><next-reply type="message_from_user" user_id="u1" /></response>',
+  )
+  assert.deepEqual(withStatusAndNextReply.nextReplies, [
+    { type: "next-reply", condition: "message_from_user", userId: "u1", group: "next-0" },
+  ])
+  const withoutStatusWithMultipleNextReplies = decodeChannelResponse(
+    '<response><think/><actions/><next-reply type="message_from_user" user_id="u1" /><next-reply type="silence" user_id="all" seconds="30" /></response>',
+  )
+  assert.equal(withoutStatusWithMultipleNextReplies.nextReplies.length, 2)
+  assert.throws(
+    () => decodeChannelResponse('<response><think/><actions><next-reply type="message_from_user" user_id="u1" /></actions><status/></response>'),
+    /不能写在 <actions> 内/,
+  )
+  assert.throws(
+    () => decodeChannelResponse('<response><think/><actions/><next-reply type="message_from_user" user_id="u1" /><status/></response>'),
+    /子元素实际为 \[think, actions, next-reply, status\]/,
+  )
+  assert.throws(
+    () => decodeChannelResponse("<response><actions><message>缺了think</message></actions></response>"),
+    /子元素实际为 \[actions\]/,
+  )
+  assert.throws(
+    () => decodeChannelResponse("<response><think/><status/></response>"),
+    /子元素实际为 \[think, status\]/,
+  )
 })
 
 const addBot = (ctx: Context, sent: string[]) => {

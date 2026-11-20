@@ -164,7 +164,6 @@ export const ChannelRoleplayLive = (
         }
         yield* Effect.logDebug(`模型最终输出：\n${output.text}`)
         const response = yield* parseChannelResponse(output.text)
-        const nextReplies = response.actions.filter((action) => action.type === "next-reply")
         const messageIds = new Set([
           ...history.messages.map((message) => message.id),
           ...(trigger.type === "message" ? trigger.messages.map((message) => message.id) : []),
@@ -175,15 +174,17 @@ export const ChannelRoleplayLive = (
         const workingStickers = new Map<StickerId, WorkingSticker>(
           currentStickers.map((item) => [item.id, { summary: item.summary, sha256: item.sha256 }]),
         )
+        for (const nextReply of response.nextReplies) {
+          if (
+            nextReply.userId !== "all" &&
+            (nextReply.userId === history.bot.id || !participantIds.has(nextReply.userId))
+          ) {
+            return yield* Effect.fail(new InvalidReply({ reason: "短期唤醒目标用户不在当前上下文中" }))
+          }
+        }
         const executions: Execution[] = []
         // 先完整校验并按顺序推演工作集，再执行任何外部动作；失败不会发出半截消息。
         for (const action of response.actions) {
-          if (action.type === "next-reply") {
-            if (action.userId !== "all" && (action.userId === history.bot.id || !participantIds.has(action.userId))) {
-              return yield* Effect.fail(new InvalidReply({ reason: "短期唤醒目标用户不在当前上下文中" }))
-            }
-            continue
-          }
           if (action.type === "message") {
             for (const part of action.parts) {
               if (part.type !== "at") continue
@@ -356,8 +357,8 @@ export const ChannelRoleplayLive = (
             .setState(channel, { ...channel.state, ...response.status })
             .pipe(Effect.mapError((cause) => new ChannelExecutionError({ stage: "state", completedActions, cause })))
         }
-        if (nextReplies.length > 0) {
-          yield* triggers.register(channel, nextReplies, (yield* DateTime.nowAsDate).getTime())
+        if (response.nextReplies.length > 0) {
+          yield* triggers.register(channel, response.nextReplies, (yield* DateTime.nowAsDate).getTime())
         }
         return { actionsExecuted: completedActions, spoke }
       })

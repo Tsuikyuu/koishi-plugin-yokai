@@ -46,7 +46,7 @@ export const StickerDeleteAction = Schema.Struct({
 })
 export type StickerDeleteAction = typeof StickerDeleteAction.Type
 
-// 频道响应动作顺序就是执行顺序。
+// 频道响应动作顺序就是执行顺序；短期唤醒独立于执行动作，在回合末尾注册。
 export const ChannelResponse = Schema.Struct({
   think: Schema.String,
   actions: Schema.Array(
@@ -58,9 +58,9 @@ export const ChannelResponse = Schema.Struct({
       StickerDeleteAction,
       NoteAction,
       RoutineAction,
-      NextReplyAction,
     ]),
   ),
   status: ChannelStatePatch,
+  nextReplies: Schema.Array(NextReplyAction),
 })
 export type ChannelResponse = typeof ChannelResponse.Type
