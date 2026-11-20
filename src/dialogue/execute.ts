@@ -84,14 +84,8 @@ export const ChannelRoleplayLive = (
           readonly tryEnterCommit?: Effect.Effect<boolean>
         },
       ) {
-        yield* Effect.logDebug(
-          `开始执行回合，触发类型 ${trigger.type}${"reason" in trigger && trigger.reason ? `，原因：${trigger.reason}` : ""}`,
-        )
         const preset = options?.preloaded ? options.preloaded.preset : yield* characters.get(channel.presetId)
         const currentStickers = yield* stickers.list(channel.presetId)
-        yield* Effect.logDebug(
-          `已加载角色预设 ${channel.presetId}（${preset.character.name}），当前表情包 ${currentStickers.length} 张`,
-        )
         const history = options?.preloaded
           ? options.preloaded.history
           : yield* platform.history(
@@ -104,16 +98,12 @@ export const ChannelRoleplayLive = (
                   }
                 : { beforeTime: trigger.time, limit: 50 },
             )
-        yield* Effect.logDebug(
-          `已读取历史 ${history.messages.length} 条，参与者 ${history.participants.length} 人`,
-        )
         const knownStickerHashes = new Set(currentStickers.map((item) => item.sha256))
         // 主模型不支持图片时不读取媒体，所有未识别为已有表情包的图片在上下文中标记为 attached="false"。
         const attachments = model.capabilities.imageInput
           ? yield* loadImageAttachments(media, history, trigger, knownStickerHashes)
           : []
         const notes = yield* loadRecentNotes(channel.id).pipe(Effect.provideService(NotebookStore, notebook))
-        yield* Effect.logDebug(`已加载近期笔记 ${notes.length} 条`)
         const routine = routines === undefined ? undefined : yield* routines.get(channel.presetId)
         const now = yield* DateTime.nowAsDate
         const context = yield* Effect.try({
@@ -132,15 +122,23 @@ export const ChannelRoleplayLive = (
             }),
           catch: (error) => new InvalidReply({ reason: error instanceof Error ? error.message : "角色上下文组装失败" }),
         })
+        const promptChars = context.messages.reduce(
+          (sum, message) =>
+            sum +
+            (typeof message.content === "string"
+              ? message.content.length
+              : message.content.reduce((count, part) => count + (part.type === "text" ? part.text.length : 0), 0)),
+          0,
+        )
+        const imageSummary = model.capabilities.imageInput ? `${attachments.length}张` : "不支持"
+        const triggerSummary =
+          trigger.type === "message"
+            ? `批次=${trigger.messages.length}条${trigger.reason ? `，原因=${trigger.reason}` : ""}`
+            : trigger.type === "schedule"
+              ? `提醒=${trigger.text}`
+              : `原因=${trigger.reason}`
         yield* Effect.logDebug(
-          `上下文组装完成，消息 ${context.messages.length} 条，共 ${context.messages.reduce(
-            (sum, message) =>
-              sum +
-              (typeof message.content === "string"
-                ? message.content.length
-                : message.content.reduce((count, part) => count + (part.type === "text" ? part.text.length : 0), 0)),
-            0,
-          )} 字符`,
+          `回合开始（角色=${channel.presetId}，${triggerSummary}，历史=${history.messages.length}条/${history.participants.length}人，图片=${imageSummary}，表情包=${currentStickers.length}张，笔记=${notes.length}条，提示词=${promptChars}字符）`,
         )
         const output = yield* generateChannelResponse(
           channel,
@@ -159,10 +157,7 @@ export const ChannelRoleplayLive = (
         }
         yield* Effect.logDebug(`模型最终输出：\n${output.text}`)
         const response = yield* parseChannelResponse(output.text).pipe(
-          Effect.tapError((error) => Effect.logDebug(`响应解析失败：${error.reason}`)),
-        )
-        yield* Effect.logDebug(
-          `响应解析完成，动作 ${response.actions.length} 个（${response.actions.map((action) => action.type).join(", ") || "无"}），状态字段 ${Object.keys(response.status).join(", ") || "无"}`,
+          Effect.tapError((error) => Effect.logWarning(`响应解析失败：${error.reason}`)),
         )
         const nextReplies = response.actions.filter((action) => action.type === "next-reply")
         const messageIds = new Set([
@@ -298,7 +293,6 @@ export const ChannelRoleplayLive = (
         let completedActions = 0
         let spoke = false
         for (const execution of executions) {
-          yield* Effect.logDebug(`执行动作 #${completedActions + 1} ${execution.type}`)
           let actionEffect: Effect.Effect<void, ChannelExecutionError["cause"]>
           switch (execution.type) {
             case "message":
@@ -310,18 +304,27 @@ export const ChannelRoleplayLive = (
               actionEffect = platform.send(channel, execution.delivery)
               break
             case "sticker-save":
-              actionEffect = stickers.save(execution.input).pipe(Effect.asVoid)
+              actionEffect = stickers.save(execution.input).pipe(
+                Effect.tap(() => Effect.logDebug(`已收藏表情包 [${execution.input.id}]`)),
+                Effect.map(() => void 0),
+              )
               break
             case "sticker-update":
-              actionEffect = stickers.update(channel.presetId, execution.stickerId, execution.summary).pipe(Effect.asVoid)
+              actionEffect = stickers.update(channel.presetId, execution.stickerId, execution.summary).pipe(
+                Effect.tap(() => Effect.logDebug(`已更新表情包 [${execution.stickerId}]`)),
+                Effect.map(() => void 0),
+              )
               break
             case "sticker-delete":
-              actionEffect = stickers.remove(channel.presetId, execution.stickerId)
+              actionEffect = stickers.remove(channel.presetId, execution.stickerId).pipe(
+                Effect.tap(() => Effect.logDebug(`已删除表情包 [${execution.stickerId}]`)),
+              )
               break
             case "note-add":
               actionEffect = executeNoteAction(channel.id, execution.action).pipe(
                 Effect.provideService(NotebookStore, notebook),
-                Effect.asVoid,
+                Effect.tap((note) => Effect.logDebug(`已新增笔记 #${note.id}`)),
+                Effect.map(() => void 0),
               )
               break
             case "routine":
@@ -330,6 +333,11 @@ export const ChannelRoleplayLive = (
                   ? Effect.fail(new CharacterRoutineError({ reason: "日程功能未开启，无法执行 routine 动作" }))
                   : executeRoutineAction(channel.presetId, execution.action).pipe(
                       Effect.provideService(CharacterRoutines, routines),
+                      Effect.tap(() =>
+                        Effect.logDebug(
+                          `已更新角色 ${channel.presetId} 日程（${execution.action.start}-${execution.action.end}）`,
+                        ),
+                      ),
                     )
               break
           }
@@ -342,11 +350,9 @@ export const ChannelRoleplayLive = (
           yield* channels
             .setState(channel, { ...channel.state, ...response.status })
             .pipe(Effect.mapError((cause) => new ChannelExecutionError({ stage: "state", completedActions, cause })))
-          yield* Effect.logDebug(`频道状态已更新：${JSON.stringify(response.status)}`)
         }
         if (nextReplies.length > 0) {
           yield* triggers.register(channel, nextReplies, (yield* DateTime.nowAsDate).getTime())
-          yield* Effect.logDebug(`已登记短期唤醒条件 ${nextReplies.length} 个`)
         }
         return { actionsExecuted: completedActions, spoke }
       })
@@ -359,7 +365,6 @@ export const ChannelRoleplayLive = (
               Effect.provideService(ChannelStore, channels),
               Effect.provideService(CharacterCatalog, characters),
             )
-            yield* Effect.logDebug(`频道已绑定角色 ${channel.presetId}`)
             const preset = yield* characters.get(channel.presetId)
             const history = yield* platform.history(channel, {
               beforeMessageId: messages[0].id,

@@ -18,5 +18,7 @@ export const initializeChannel: InitializeChannel = (key, presetId) =>
     const preset = yield* characters.get(existing?.presetId ?? presetId)
     if (existing !== undefined) return existing
     const { emotion, condition, activity, short_memory } = preset.initialState
-    return yield* channels.bind(key, presetId, { emotion, condition, activity, short_memory })
+    const bound = yield* channels.bind(key, presetId, { emotion, condition, activity, short_memory })
+    yield* Effect.logDebug(`新频道首次绑定角色 ${bound.presetId}`)
+    return bound
   })

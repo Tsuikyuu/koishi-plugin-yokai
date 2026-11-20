@@ -36,6 +36,12 @@ interface CatalogEntry {
   readonly imageInput?: boolean
 }
 
+interface ProviderCatalogGroup {
+  readonly provider: Provider
+  readonly count: number | undefined
+  readonly entries: ReadonlyArray<CatalogEntry>
+}
+
 // 固定本次配置快照；网络返回前及失败时仍保留当前值可选。
 export const registerModelSchema = Effect.fn("Yokai.registerModelSchema")(
   function* (ctx: Context, models: Config["models"], support?: ImageSupport) {
@@ -47,14 +53,17 @@ export const registerModelSchema = Effect.fn("Yokai.registerModelSchema")(
       sources,
       (candidate) =>
         listModels(http, candidate.provider, candidate).pipe(
-          Effect.tap((models) => Effect.logDebug(`已获取 ${candidate.provider} 模型列表：${models.length} 个`)),
-          Effect.map((models) =>
-            models.map(
-              (model): CatalogEntry => ({
-                key: `${candidate.provider}/${model.id}`,
-                ...(model.imageInput === undefined ? {} : { imageInput: model.imageInput }),
-              }),
-            ),
+          Effect.map(
+            (models): ProviderCatalogGroup => ({
+              provider: candidate.provider,
+              count: models.length,
+              entries: models.map(
+                (model): CatalogEntry => ({
+                  key: `${candidate.provider}/${model.id}`,
+                  ...(model.imageInput === undefined ? {} : { imageInput: model.imageInput }),
+                }),
+              ),
+            }),
           ),
           Effect.catchCause((cause) => {
             if (Cause.hasInterrupts(cause)) return Effect.failCause(cause)
@@ -63,16 +72,22 @@ export const registerModelSchema = Effect.fn("Yokai.registerModelSchema")(
               ? `${failure.value.kind}${failure.value.status === undefined ? "" : ` HTTP ${failure.value.status}`}`
               : "内部错误"
             return Effect.logWarning(`获取 ${candidate.provider} 模型列表失败：${reason}`).pipe(
-              Effect.as([] as CatalogEntry[]),
+              Effect.map((): ProviderCatalogGroup => ({ provider: candidate.provider, count: undefined, entries: [] })),
             )
           }),
         ),
       { concurrency: "unbounded" },
     )
-    const entries = groups.flat()
+    const fetchedSummary = groups.flatMap((group) =>
+      group.count === undefined ? [] : [`${group.provider}(${group.count})`],
+    )
+    if (fetchedSummary.length > 0) {
+      yield* Effect.logDebug(`已刷新可选模型列表：${fetchedSummary.join("，")}`)
+    }
+    const entries = groups.flatMap((group) => group.entries)
     if (support !== undefined) {
-      const declared = entries.flatMap((entry) =>
-        entry.imageInput === undefined ? [] : ([[entry.key, entry.imageInput]] as const),
+      const declared: Array<readonly [string, boolean]> = entries.flatMap((entry) =>
+        entry.imageInput === undefined ? [] : [[entry.key, entry.imageInput]],
       )
       yield* Ref.update(support, (current) => {
         const next = new Map(current)

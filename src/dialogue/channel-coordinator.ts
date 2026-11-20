@@ -1,6 +1,6 @@
 import { DateTime, Deferred, Effect, Exit, Ref } from "effect"
 import { channelIdOf, type ChannelId, type ChannelKey } from "../channels/channel"
-import type { Message, ParticipantId } from "../channels/message"
+import { messageText, type Message, type ParticipantId } from "../channels/message"
 import type { CharacterId } from "../characters/character"
 import type { ScheduleTask } from "../scheduling/schedule"
 import type { ProactiveTrigger } from "./next-reply/triggers"
@@ -300,12 +300,12 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
           (
             all,
           ): readonly [
-            { readonly startWorker: boolean; readonly wait: Deferred.Deferred<void> | undefined },
+            { readonly startWorker: boolean; readonly skipped: boolean; readonly wait: Deferred.Deferred<void> | undefined },
             ReadonlyMap<ChannelId, ChannelEntry<Ctx, ScheduleError>>,
           ] => {
             // 主动唤醒与旁听探头无需防抖；若频道已有待处理或执行中的回合，直接跳过
             if (all.has(channelId)) {
-              return [{ startWorker: false, wait: undefined }, all]
+              return [{ startWorker: false, skipped: true, wait: undefined }, all]
             }
             const done = Deferred.makeUnsafe<void>()
             const created: ChannelEntry<Ctx, ScheduleError> = {
@@ -314,9 +314,15 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
               active: undefined,
               wakeDebounce: undefined,
             }
-            return [{ startWorker: true, wait: done }, new Map(all).set(channelId, created)]
+            return [{ startWorker: true, skipped: false, wait: done }, new Map(all).set(channelId, created)]
           },
         )
+        if (decision.skipped) {
+          yield* Effect.logDebug(
+            `频道存在进行中或待处理回合，跳过本次${source === "ambient" ? "旁听探头" : "短期唤醒"}`,
+          ).pipe(Effect.annotateLogs({ channel: channelId, trigger: source }))
+          return
+        }
         if (decision.startWorker) {
           yield* spawn(worker(channelId))
         }
@@ -338,6 +344,7 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
                 readonly startWorker: boolean
                 readonly signal: Deferred.Deferred<void> | undefined
                 readonly wait: Deferred.Deferred<void> | undefined
+                readonly log?: string
               },
               ReadonlyMap<ChannelId, ChannelEntry<Ctx, ScheduleError>>,
             ] => {
@@ -358,6 +365,7 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
               return [{ startWorker: true, signal: undefined, wait: done }, new Map(all).set(channelId, created)]
             }
 
+            const trailingText = input.triggered ? "" : `：${messageText(input.message)}`
             // 正在对消息批次进行可中断推理：仅被跟踪的发言人追发或新触发消息才会打断重想
             if (entry.active?.type === "message" && entry.active.interruptible) {
               const shouldInterrupt = input.triggered || entry.active.batch.trackedSenders.has(input.message.sender)
@@ -384,7 +392,12 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
                 active: undefined,
               }
               return [
-                { startWorker: false, signal: entry.active.cancel, wait: merged.done },
+                {
+                  startWorker: false,
+                  signal: entry.active.cancel,
+                  wait: merged.done,
+                  log: `新消息 ${input.message.id} 抢占当前对话推理，合并进防抖批次（累计 ${merged.messages.length} 条）${trailingText}`,
+                },
                 new Map(all).set(channelId, updated),
               ]
             }
@@ -402,7 +415,12 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
                 active: undefined,
               }
               return [
-                { startWorker: false, signal: entry.active.cancel, wait: done },
+                {
+                  startWorker: false,
+                  signal: entry.active.cancel,
+                  wait: done,
+                  log: `用户消息 ${input.message.id} 抢占当前${entry.active.job.source === "ambient" ? "旁听探头" : "短期唤醒"}推理，转入消息防抖`,
+                },
                 new Map(all).set(channelId, updated),
               ]
             }
@@ -421,6 +439,9 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
                   startWorker: false,
                   signal: tracked ? entry.wakeDebounce : undefined,
                   wait: tracked ? merged.done : undefined,
+                  ...(tracked
+                    ? { log: `追发消息 ${input.message.id} 合并进防抖批次（累计 ${merged.messages.length} 条）${trailingText}` }
+                    : {}),
                 },
                 new Map(all).set(channelId, updated),
               ]
@@ -432,11 +453,19 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
             const done = Deferred.makeUnsafe<void>()
             const batch = createBatch(input, config, done)
             return [
-              { startWorker: false, signal: undefined, wait: done },
+              {
+                startWorker: false,
+                signal: undefined,
+                wait: done,
+                log: `当前回合处于提交阶段，新触发消息 ${input.message.id} 已排队等待下一轮`,
+              },
               new Map(all).set(channelId, { ...entry, pendingBatch: batch }),
             ]
           })
 
+          if (decision.log !== undefined) {
+            yield* Effect.logDebug(decision.log).pipe(Effect.annotateLogs({ channel: channelId }))
+          }
           if (decision.signal !== undefined) {
             yield* Deferred.succeed(decision.signal, void 0)
           }
@@ -445,7 +474,9 @@ export const makeChannelCoordinator = <Ctx, ScheduleError = never>(
           }
           if (decision.wait !== undefined) {
             yield* Deferred.await(decision.wait)
+            return true
           }
+          return false
         }),
 
       submitProactive: (trigger) => submitInterruptible("next-reply", trigger),

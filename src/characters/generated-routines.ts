@@ -13,13 +13,17 @@ export const CharacterRoutinesLive = (presets: ReadonlyArray<CharacterPreset>, t
       const generated = yield* Effect.forEach(
         presets,
         Effect.fn("CharacterRoutines.generate")(function* (preset) {
-          const output = yield* model.generate(buildRoutineContext(preset, timezone))
-          const reason = `角色「${preset.character.name}」的日程必须是连续覆盖 00:00–24:00 的分钟级 JSON 时间表`
-          if (output.toolCalls !== undefined) return yield* Effect.fail(new CharacterRoutineError({ reason }))
-          const routine = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CharacterRoutine), {
-            onExcessProperty: "error",
-          })(output.text).pipe(Effect.mapError(() => new CharacterRoutineError({ reason })))
-          return { id: preset.character.id, routine }
+          return yield* Effect.gen(function* () {
+            yield* Effect.logDebug(`正在生成角色 ${preset.character.id}（${preset.character.name}）日常时间表`)
+            const output = yield* model.generate(buildRoutineContext(preset, timezone))
+            const reason = `角色「${preset.character.name}」的日程必须是连续覆盖 00:00–24:00 的分钟级 JSON 时间表`
+            if (output.toolCalls !== undefined) return yield* Effect.fail(new CharacterRoutineError({ reason }))
+            const routine = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CharacterRoutine), {
+              onExcessProperty: "error",
+            })(output.text).pipe(Effect.mapError(() => new CharacterRoutineError({ reason })))
+            yield* Effect.logDebug(`角色 ${preset.character.id} 日常时间表生成完成（${routine.entries.length} 个时段）`)
+            return { id: preset.character.id, routine }
+          }).pipe(Effect.annotateLogs({ character: preset.character.id, trigger: "routine-init" }))
         }),
       )
       const routines = yield* Ref.make(generated)

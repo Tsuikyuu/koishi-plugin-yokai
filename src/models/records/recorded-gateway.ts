@@ -26,7 +26,6 @@ export const ModelGatewayRecorded = (modelName: string) =>
               const id = yield* traces
                 .begin(modelName, visibleInput)
                 .pipe(Effect.mapError(() => new ModelError({ kind: "Recording" })))
-              yield* Effect.logDebug(`请求模型 ${modelName}，调用记录 ${id}`)
               const [duration, exit] = yield* Effect.timed(Effect.exit(restore(gateway.generate(input))))
               let outcome: ModelTraceOutcome
               if (Exit.isSuccess(exit)) {
@@ -47,7 +46,7 @@ export const ModelGatewayRecorded = (modelName: string) =>
               // 取消时也完成结果落盘；只保护本地记录，不屏蔽模型请求的取消。
               yield* traces.finish(id, outcome).pipe(Effect.mapError(() => new ModelError({ kind: "Recording" })))
               yield* Effect.logDebug(
-                `模型调用结束 ${outcome.status}${outcome.status === "failed" ? `（${outcome.error.kind}${outcome.error.status === undefined ? "" : ` ${outcome.error.status}`}）` : ""}，耗时 ${Math.round(Duration.toMillis(duration))}ms，调用记录 ${id}`,
+                `模型调用 ${modelName} -> ${outcome.status}${outcome.status === "failed" ? `(${outcome.error.kind}${outcome.error.status === undefined ? "" : ` ${outcome.error.status}`})` : ""}（${Math.round(Duration.toMillis(duration))}ms，记录 ${id}）`,
               )
               if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
               return exit.value

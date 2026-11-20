@@ -1,8 +1,12 @@
 import { Effect, Layer, Ref } from "effect"
 import { channelIdOf, type ChannelId } from "../../channels/channel"
 import type { Message, ParticipantId } from "../../channels/message"
-import type { ProactiveTrigger } from "../next-reply/triggers"
-import { AmbientTriggers, type AmbientProbeConfig } from "./probe"
+import {
+  AmbientTriggers,
+  type AmbientObservation,
+  type AmbientProbeConfig,
+  type AmbientProbeResult,
+} from "./probe"
 
 const HalfLifeMs = 90_000
 const ActiveWindowMs = 120_000
@@ -76,7 +80,7 @@ export const AmbientTriggersLive = (config: AmbientProbeConfig) =>
                 states,
                 (
                   all,
-                ): readonly [ProactiveTrigger | undefined, ReadonlyMap<ChannelId, ChannelAmbientState>] => {
+                ): readonly [AmbientObservation, ReadonlyMap<ChannelId, ChannelAmbientState>] => {
                   const channelId = channelIdOf(channel)
                   const prev = all.get(channelId)
                   const silentStreak =
@@ -95,7 +99,10 @@ export const AmbientTriggersLive = (config: AmbientProbeConfig) =>
                       cooldownUntil: prev.cooldownUntil,
                       silentStreak,
                     }
-                    return [undefined, new Map(all).set(channelId, cooled)]
+                    return [
+                      { status: "cooling", remainingSeconds: Math.ceil((prev.cooldownUntil - now) / 1000) },
+                      new Map(all).set(channelId, cooled),
+                    ]
                   }
 
                   const decayed =
@@ -127,7 +134,7 @@ export const AmbientTriggersLive = (config: AmbientProbeConfig) =>
                       cooldownUntil: prev?.cooldownUntil ?? 0,
                       silentStreak,
                     }
-                    return [undefined, new Map(all).set(channelId, updated)]
+                    return [{ status: "accumulating", heat: nextHeat }, new Map(all).set(channelId, updated)]
                   }
 
                   const reason = isEcho
@@ -135,19 +142,27 @@ export const AmbientTriggersLive = (config: AmbientProbeConfig) =>
                     : hasImage
                       ? "群里有人在发图聊天，你顺手点开群聊看了一眼"
                       : "群里大家聊得正热闹，你顺手点开群聊看了一眼"
+                  const cooldownMs = backoffCooldownMs(baseCooldownMs, silentStreak)
                   const triggeredState: ChannelAmbientState = {
                     heat: 0,
                     lastMessageAt: now,
                     lastSender: message.sender,
                     lastSignature: signature,
                     recentSpeakers,
-                    cooldownUntil: now + backoffCooldownMs(baseCooldownMs, silentStreak),
+                    cooldownUntil: now + cooldownMs,
                     silentStreak,
                   }
-                  return [{ channel, reason, time: now }, new Map(all).set(channelId, triggeredState)]
+                  return [
+                    {
+                      status: "triggered",
+                      trigger: { channel, reason, time: now },
+                      cooldownSeconds: Math.round(cooldownMs / 1000),
+                    },
+                    new Map(all).set(channelId, triggeredState),
+                  ]
                 },
               )
-            : Effect.succeed(undefined),
+            : Effect.succeed({ status: "disabled" }),
 
         onExplicitTurn: (channel, now) =>
           Ref.update(states, (all) => {
@@ -163,17 +178,24 @@ export const AmbientTriggersLive = (config: AmbientProbeConfig) =>
           }),
 
         onProbeCompleted: (channel, spoke, now) =>
-          Ref.update(states, (all) => {
-            const channelId = channelIdOf(channel)
-            const prev = all.get(channelId) ?? emptyState(now)
-            const nextStreak = spoke ? 0 : prev.silentStreak + 1
-            return new Map(all).set(channelId, {
-              ...prev,
-              heat: 0,
-              silentStreak: nextStreak,
-              cooldownUntil: now + backoffCooldownMs(baseCooldownMs, nextStreak),
-            })
-          }),
+          Ref.modify(
+            states,
+            (all): readonly [AmbientProbeResult, ReadonlyMap<ChannelId, ChannelAmbientState>] => {
+              const channelId = channelIdOf(channel)
+              const prev = all.get(channelId) ?? emptyState(now)
+              const nextStreak = spoke ? 0 : prev.silentStreak + 1
+              const cooldownMs = backoffCooldownMs(baseCooldownMs, nextStreak)
+              return [
+                { silentStreak: nextStreak, cooldownSeconds: Math.round(cooldownMs / 1000) },
+                new Map(all).set(channelId, {
+                  ...prev,
+                  heat: 0,
+                  silentStreak: nextStreak,
+                  cooldownUntil: now + cooldownMs,
+                }),
+              ]
+            },
+          ),
       })
     }),
   )

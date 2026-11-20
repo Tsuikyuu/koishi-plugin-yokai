@@ -17,13 +17,14 @@ import { resolveConfig, resolveModel } from "../config/resolve"
 import { ChannelRoleplay, type ChannelReplyError } from "../dialogue/dialogue"
 import { ChannelRoleplayLive } from "../dialogue/execute"
 import { makeChannelCoordinator } from "../dialogue/channel-coordinator"
-import { matchesGroupTrigger } from "../dialogue/match-trigger"
+import { matchGroupTriggerRule } from "../dialogue/match-trigger"
 import { AmbientTriggers } from "../dialogue/ambient/probe"
 import { AmbientTriggersLive } from "../dialogue/ambient/track-probe"
 import { ChannelStore, ChannelStoreError } from "../channels/store"
 import { ChannelMediaStore } from "../channels/media"
 import { channelMediaStoreFile } from "../channels/file-media"
 import type { KoishiHistoryError } from "../channels/history"
+import { messageText } from "../channels/message"
 import { CharacterCatalog } from "../characters/catalog"
 import { CharacterRoutinesLive } from "../characters/generated-routines"
 import { CharacterRoutines } from "../characters/routines"
@@ -70,9 +71,6 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       const modelLayer = Effect.gen(function* () {
         const selected = yield* resolveModel(raw.models)
         const imageInput = (yield* Ref.get(imageSupport)).get(`${selected.provider}/${selected.model}`) ?? true
-        yield* Effect.logDebug(
-          `选用模型 ${selected.provider}/${selected.model}（图片输入${imageInput ? "已启用" : "不受支持，本轮不附带图片"}）`,
-        )
         const capabilities = { imageInput }
         const gateway =
           selected.provider === "deepseek"
@@ -161,7 +159,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
                 yield* ambientService.onExplicitTurn(batch.key, Date.now())
               }
               yield* Effect.logDebug(
-                `消息回合完成，合并消息 ${batch.messages.length} 条，执行动作 ${result.actionsExecuted} 个`,
+                `回合完成（合并消息 ${batch.messages.length} 条，执行动作 ${result.actionsExecuted} 个）`,
               )
             }).pipe(
               Effect.catchCause(report),
@@ -173,7 +171,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
               const session = yield* history.sessionFor(trigger.channel)
               if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
               const result = yield* execute(session, (roleplay) => roleplay.proactive(trigger, { tryEnterCommit }))
-              yield* Effect.logDebug(`主动回合完成，执行动作 ${result.actionsExecuted} 个`)
+              yield* Effect.logDebug(`回合完成（执行动作 ${result.actionsExecuted} 个）`)
             }).pipe(
               Effect.catchCause(report),
               Effect.withLogSpan("turn"),
@@ -195,11 +193,13 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
                 roleplay.ambient(trigger, { tryEnterCommit: trackedCommit }),
               )
               if (committed) {
-                yield* ambientService.onProbeCompleted(trigger.channel, result.spoke, Date.now())
+                const probeResult = yield* ambientService.onProbeCompleted(trigger.channel, result.spoke, Date.now())
+                yield* Effect.logDebug(
+                  `回合完成（是否发言=${result.spoke}，执行动作=${result.actionsExecuted}个，连续静默=${probeResult.silentStreak}次，冷却=${probeResult.cooldownSeconds}s）`,
+                )
+              } else {
+                yield* Effect.logDebug("旁听探头被后续消息抢占，未提交")
               }
-              yield* Effect.logDebug(
-                `旁听探头回合完成，是否发言=${result.spoke}，执行动作 ${result.actionsExecuted} 个`,
-              )
             }).pipe(
               Effect.catchCause(report),
               Effect.withLogSpan("turn"),
@@ -210,16 +210,18 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
               const payload = yield* Schema.decodeUnknownEffect(WakeUpReplyPayload)(task.payload).pipe(
                 Effect.mapError(() => new InvalidReply({ reason: "无法识别的主动唤醒任务" })),
               )
-              const session = yield* history.sessionFor(payload)
-              if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
-              const result = yield* execute(session, (roleplay) => roleplay.scheduled(task))
-              yield* Effect.logDebug(
-                result === undefined ? "定时任务已失效，未执行" : `定时回合完成，执行动作 ${result.actionsExecuted} 个`,
+              return yield* Effect.gen(function* () {
+                const session = yield* history.sessionFor(payload)
+                if (!session) return yield* Effect.logDebug("无法还原可发送的会话（无在线受理机器人或被过滤），跳过")
+                const result = yield* execute(session, (roleplay) => roleplay.scheduled(task))
+                yield* Effect.logDebug(
+                  result === undefined ? "定时任务已失效，未执行" : `回合完成（执行动作 ${result.actionsExecuted} 个）`,
+                )
+              }).pipe(
+                Effect.withLogSpan("turn"),
+                Effect.annotateLogs({ channel: channelIdOf(payload), trigger: "schedule" }),
               )
-            }).pipe(
-              Effect.withLogSpan("turn"),
-              Effect.annotateLogs({ trigger: "schedule" }),
-            ),
+            }),
         },
         (effect) => Effect.sync(() => run(effect)),
       )
@@ -227,9 +229,6 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
       // 由 Koishi 中间件调用：入站消息立即落库，再交由单频道协调器防抖合并或累积潜水探头热度。
       const receive = Effect.fn("Yokai.receive")(function* (session: Session) {
         const key = keyOf(session)
-        yield* Effect.logDebug(
-          `收到消息 message=${session.messageId} user=${session.userId} direct=${session.isDirect}：${session.content}`,
-        )
         if (!key) return yield* Effect.logDebug("会话缺少平台或频道标识，忽略")
         // Koishi 只为群聊建档；私聊按同一规则（autoAssign）补建频道记录。
         if (session.isDirect) {
@@ -237,27 +236,32 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
             try: () => session.getChannel(key.channelId, ["assignee"]),
             catch: () => new ChannelStoreError({ operation: "attach" }),
           })
-          yield* Effect.logDebug("私聊频道记录已就绪")
         }
         const received = yield* history.recordIncoming(session)
-        if (!received) return yield* Effect.logDebug("消息未写入历史（无文本或重复事件），跳过本轮")
+        if (!received) return
         const now = Date.now()
         const reason = yield* triggerService.observeAndMatch(key, received.incoming, now)
-        if (reason !== undefined) yield* Effect.logDebug(`消息命中短期唤醒条件：${reason}`)
         const existing = received.direct ? undefined : yield* channels.find(key)
-        let triggered = received.direct || reason !== undefined
-        if (!triggered) {
+        let triggerRule: string | undefined =
+          reason !== undefined ? `短期唤醒：${reason}` : received.direct ? "私聊" : undefined
+        if (triggerRule === undefined) {
           const preset = yield* Effect.flatMap(CharacterCatalog, (service) =>
             service.get(existing?.presetId ?? config.characterId),
           ).pipe(Effect.provide(catalog()))
-          triggered = matchesGroupTrigger(
+          const matchedRule = matchGroupTriggerRule(
             config.triggers,
             received.incoming,
             { botId: received.botId, quotedBot: received.quotedBot },
             preset.character,
           )
+          if (matchedRule !== undefined) {
+            triggerRule = `群聊门控[${matchedRule}]`
+          }
         }
-        if (triggered) {
+        const quoteTag = received.incoming.quote ? `（引用 ${received.incoming.quote}）` : ""
+        const inboundHead = `入站 ${received.incoming.id} ${received.senderName}(${received.incoming.sender})${quoteTag}：${messageText(received.incoming)}`
+        if (triggerRule !== undefined) {
+          yield* Effect.logDebug(`${inboundHead} -> 触发回复（${triggerRule}）`)
           if (!received.direct) {
             yield* ambientService.onExplicitTurn(key, now)
           }
@@ -272,7 +276,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           })
           return
         }
-        yield* coordinator.submitMessage({
+        const merged = yield* coordinator.submitMessage({
           key,
           presetId: config.characterId,
           context: session,
@@ -281,11 +285,25 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           now,
         })
         if (!received.direct && existing !== undefined) {
-          const probe = yield* ambientService.observe(key, received.incoming, now)
-          if (probe !== undefined) {
-            yield* Effect.logDebug(`群聊热度达到阈值，触发旁听探头：${probe.reason}`)
-            yield* coordinator.submitAmbient(probe)
+          const observation = yield* ambientService.observe(key, received.incoming, now)
+          if (!merged) {
+            const probeStatus =
+              observation.status === "triggered"
+                ? `触发旁听探头（${observation.trigger.reason}，冷却 ${observation.cooldownSeconds}s）`
+                : observation.status === "accumulating"
+                  ? `未触发（探头热度 ${observation.heat.toFixed(2)}/1.00）`
+                  : observation.status === "cooling"
+                    ? `未触发（探头冷却剩余 ${observation.remainingSeconds}s）`
+                    : "未触发"
+            yield* Effect.logDebug(`${inboundHead} -> ${probeStatus}`)
           }
+          if (observation.status === "triggered") {
+            yield* coordinator.submitAmbient(observation.trigger)
+          }
+          return
+        }
+        if (!merged) {
+          yield* Effect.logDebug(`${inboundHead} -> 未触发`)
         }
       })
 
@@ -293,10 +311,10 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
         const payload = yield* Schema.decodeUnknownEffect(WakeUpReplyPayload)(task.payload).pipe(
           Effect.mapError(() => new InvalidReply({ reason: "无法识别的主动唤醒任务" })),
         )
-        yield* Effect.logDebug(`定时任务 ${task.id} 到期：${payload.text}`)
-        yield* coordinator.submitScheduled(payload, task).pipe(
-          Effect.annotateLogs({ channel: channelIdOf(payload) }),
-        )
+        yield* Effect.gen(function* () {
+          yield* Effect.logDebug(`定时任务 #${task.id} 到期：${payload.text}`)
+          yield* coordinator.submitScheduled(payload, task)
+        }).pipe(Effect.annotateLogs({ channel: channelIdOf(payload), trigger: "schedule" }))
       })
 
       const scheduleTick = Effect.gen(function* () {
@@ -309,7 +327,9 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           pending,
           (trigger) =>
             Effect.gen(function* () {
-              yield* Effect.logDebug(`短期唤醒条件满足：${trigger.reason}`)
+              yield* Effect.logDebug(`短期唤醒条件满足：${trigger.reason}`).pipe(
+                Effect.annotateLogs({ channel: channelIdOf(trigger.channel), trigger: "next-reply" }),
+              )
               yield* coordinator.submitProactive(trigger)
             }).pipe(Effect.catchCause(report)),
           { concurrency: "unbounded", discard: true },
@@ -327,8 +347,7 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
                 run(
                   receive(session).pipe(
                     Effect.catchCause(report),
-                    Effect.withLogSpan("turn"),
-                    Effect.annotateLogs({ channel: session.cid, trigger: "message" }),
+                    Effect.annotateLogs({ channel: session.cid }),
                   ),
                 ),
               ),

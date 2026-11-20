@@ -16,40 +16,50 @@ export const triggerTargetFromHistory = (message: Message, history: ChannelHisto
     (history.quotedBot ?? history.messages.some((item) => item.id === message.quote && item.sender === history.bot.id)),
 })
 
-// 判断群聊入站消息是否命中任一已启用的触发门控。
-export const matchesGroupTrigger = (
+export type GroupTriggerRule = "at" | "quote" | "name-prefix" | "name-contains"
+
+// 返回群聊入站消息命中的具体触发门控规则；未命中时返回 undefined。
+export const matchGroupTriggerRule = (
   config: GroupTriggerConfig,
   message: Message,
   target: TriggerMatchTarget,
   character: Character,
-): boolean => {
+): GroupTriggerRule | undefined => {
   if (config.at && message.parts.some((part) => part.type === "at" && part.target === target.botId)) {
-    return true
+    return "at"
   }
   if (config.quote && message.quote !== undefined && target.quotedBot) {
-    return true
+    return "quote"
   }
   if (!config.nameContains && !config.namePrefix) {
-    return false
+    return undefined
   }
   const names = [
     ...new Set([character.name, ...character.aliases].map((name) => name.trim()).filter((name) => name !== "")),
   ]
   if (names.length === 0) {
-    return false
+    return undefined
   }
   const text = message.parts
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
     .join("")
     .trimStart()
   if (text === "") {
-    return false
-  }
-  if (config.nameContains && names.some((name) => text.includes(name))) {
-    return true
+    return undefined
   }
   if (config.namePrefix && names.some((name) => text.startsWith(name))) {
-    return true
+    return "name-prefix"
   }
-  return false
+  if (config.nameContains && names.some((name) => text.includes(name))) {
+    return "name-contains"
+  }
+  return undefined
 }
+
+// 判断群聊入站消息是否命中任一已启用的触发门控。
+export const matchesGroupTrigger = (
+  config: GroupTriggerConfig,
+  message: Message,
+  target: TriggerMatchTarget,
+  character: Character,
+): boolean => matchGroupTriggerRule(config, message, target, character) !== undefined

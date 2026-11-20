@@ -268,7 +268,6 @@ export const createKoishiHistory = (
           if (latestState.syncedSid === bot.sid || bot.status !== Universal.Status.ONLINE) return
           const loadList = fetchRecentMessages(bot, key.channelId)
           if (loadList === undefined) {
-            yield* Effect.logDebug("平台未实现历史消息拉取接口，跳过近期消息补齐")
             yield* markSynced(id, latestState, bot.sid)
             return
           }
@@ -285,7 +284,6 @@ export const createKoishiHistory = (
           }
           const rawItems = fetched.success?.data ?? []
           if (rawItems.length === 0) {
-            yield* Effect.logDebug("平台返回近期历史消息 0 条")
             yield* markSynced(id, latestState, bot.sid)
             return
           }
@@ -345,7 +343,6 @@ export const createKoishiHistory = (
               )
           const missing = selectMissingMessages(candidates, latest, existingIds)
           if (missing.length === 0) {
-            yield* Effect.logDebug(`平台返回近期历史消息 ${rawItems.length} 条，无新增缺失记录`)
             yield* markSynced(id, latestState, bot.sid)
             return
           }
@@ -418,7 +415,6 @@ export const createKoishiHistory = (
           }
 
           if (prepared.length === 0) {
-            yield* Effect.logDebug(`平台返回近期历史消息 ${rawItems.length} 条，无新增缺失记录`)
             yield* markSynced(id, latestState, bot.sid)
             return
           }
@@ -556,12 +552,10 @@ export const createKoishiHistory = (
             return
           }
           yield* record(session, incoming, participant, "incoming")
-          yield* Effect.logDebug(
-            `已记录入站消息 ${incoming.id}，发送者 ${participant.name}(${participant.id})${incoming.quote ? `，引用 ${incoming.quote}` : ""}：${messageText(incoming)}`,
-          )
           return {
             key,
             incoming,
+            senderName: participant.name,
             botId,
             direct: session.isDirect,
             quotedBot: quotedSenderId === session.selfId,
@@ -753,9 +747,6 @@ export const createKoishiHistory = (
           }),
           // 原生发送无法中途撤销：等待当前发送与历史写入落定后再响应中断，下一动作仍可被取消。
           send: Effect.fn("KoishiHistory.send")(function* (_key, action) {
-            yield* Effect.logDebug(
-              `发送${action.type === "sticker" ? `表情包 ${action.stickerId}` : "消息"}${action.quote ? `（引用 ${action.quote}）` : ""}`,
-            )
             const ids = yield* Effect.tryPromise({
               try: () =>
                 session.bot.sendMessage(session.channelId!, encodeAction(action), session.event.referrer, { session }),
@@ -797,7 +788,12 @@ export const createKoishiHistory = (
             yield* record(session, message, participant, "outgoing").pipe(
               Effect.mapError(() => new ChannelPlatformError({ operation: "send" })),
             )
-            yield* Effect.logDebug(`消息已发送并记录，平台消息 ID ${ids.join(", ")}`)
+            const quoteTag = action.quote ? `（引用 ${action.quote}）` : ""
+            yield* Effect.logDebug(
+              action.type === "sticker"
+                ? `已发送表情包 [${action.stickerId}]${quoteTag} -> ID ${ids.join(", ")}`
+                : `已发送消息${quoteTag} -> ID ${ids.join(", ")}：${messageText(message)}`,
+            )
           }, Effect.uninterruptible),
         }),
       )

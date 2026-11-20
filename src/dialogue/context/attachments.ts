@@ -64,6 +64,28 @@ export const selectImages = (
   return selected
 }
 
+const uniqueAvailableImageCount = (
+  history: ChannelHistory,
+  trigger: ChannelTrigger,
+  knownStickerHashes: ReadonlySet<string>,
+): number => {
+  const seen = new Set<string>(knownStickerHashes)
+  let count = 0
+  const messages = [
+    ...(trigger.type === "message" ? trigger.messages : []),
+    ...history.messages,
+  ]
+  for (const message of messages) {
+    for (const item of message.parts) {
+      if (item.type !== "image" || !("sha256" in item) || item.stickerId !== undefined) continue
+      if (seen.has(item.sha256)) continue
+      seen.add(item.sha256)
+      count++
+    }
+  }
+  return count
+}
+
 // 读取窗口内图片字节；媒体缺失时跳过，上下文以 attached="false" 表示未附带。
 export const loadImageAttachments = (
   media: ChannelMediaStore["Service"],
@@ -72,11 +94,18 @@ export const loadImageAttachments = (
   knownStickerHashes: ReadonlySet<string> = new Set(),
 ) =>
   Effect.gen(function* () {
+    const selected = selectImages(history, trigger, knownStickerHashes)
+    const totalAvailable = uniqueAvailableImageCount(history, trigger, knownStickerHashes)
     const attachments: ImageAttachment[] = []
-    for (const candidate of selectImages(history, trigger, knownStickerHashes)) {
+    for (const candidate of selected) {
       const bytes = yield* media.read(candidate.sha256)
       if (bytes === undefined) continue
       attachments.push({ ...candidate, ref: `img_${attachments.length + 1}`, bytes })
+    }
+    if (totalAvailable > selected.length) {
+      yield* Effect.logDebug(
+        `历史窗口共有 ${totalAvailable} 张去重图片，受数量或体积上限约束筛选最新 ${selected.length} 张`,
+      )
     }
     return attachments
   })

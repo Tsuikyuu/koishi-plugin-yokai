@@ -30,10 +30,8 @@ export const generateChannelResponse = Effect.fn("generateChannelResponse")(func
   let input: ModelInput = { ...context, tools: [notebookQueryTool, wakeUpTool] }
   let noteIds = initialNoteIds
   for (let round = 0; ; round++) {
-    yield* Effect.logDebug(`第 ${round + 1} 轮模型调用，输入消息 ${input.messages.length} 条`)
     const output = yield* model.generate(input)
     if (output.toolCalls === undefined) {
-      yield* Effect.logDebug(`第 ${round + 1} 轮模型返回最终回复，${output.text.length} 字符`)
       return { text: output.text, noteIds }
     }
     yield* Effect.logDebug(

@@ -11,6 +11,7 @@ export class KoishiHistoryError extends Schema.TaggedError<KoishiHistoryError>()
 export interface RecordedIncoming {
   readonly key: ChannelKey
   readonly incoming: Message
+  readonly senderName: string
   readonly botId: ParticipantId
   readonly direct: boolean
   readonly quotedBot: boolean

@@ -8,6 +8,17 @@ export interface AmbientProbeConfig {
   readonly cooldownSeconds: number
 }
 
+export type AmbientObservation =
+  | { readonly status: "disabled" }
+  | { readonly status: "cooling"; readonly remainingSeconds: number }
+  | { readonly status: "accumulating"; readonly heat: number }
+  | { readonly status: "triggered"; readonly trigger: ProactiveTrigger; readonly cooldownSeconds: number }
+
+export interface AmbientProbeResult {
+  readonly silentStreak: number
+  readonly cooldownSeconds: number
+}
+
 // 群聊潜水态热度与退避状态只保存在运行时内存；进程重启后重新累积。
 export class AmbientTriggers extends Context.Service<
   AmbientTriggers,
@@ -16,8 +27,8 @@ export class AmbientTriggers extends Context.Service<
       channel: ChannelKey,
       message: Message,
       now: number,
-    ) => Effect.Effect<ProactiveTrigger | undefined>
+    ) => Effect.Effect<AmbientObservation>
     readonly onExplicitTurn: (channel: ChannelKey, now: number) => Effect.Effect<void>
-    readonly onProbeCompleted: (channel: ChannelKey, spoke: boolean, now: number) => Effect.Effect<void>
+    readonly onProbeCompleted: (channel: ChannelKey, spoke: boolean, now: number) => Effect.Effect<AmbientProbeResult>
   }
 >()("yokai/dialogue/AmbientTriggers") {}
