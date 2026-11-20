@@ -24,8 +24,21 @@ Koishi AI 角色扮演插件。
 | `roleplay.triggerOnNamePrefix` | `true`                         | 群聊消息以角色名称或别名开头时是否触发生成              |
 | `roleplay.debounceMs`               | `2000`                         | 定向对话时等待提及者把话说完的防抖时间（毫秒，0 关闭）  |
 | `roleplay.maxDebounceMs`            | `8000`                         | 单轮防抖合并的最长等待时间（毫秒）                      |
-| `roleplay.proactiveEnabled`         | `true`                         | 是否开启群聊潜水态热度探头（多人热聊/斗图/复读时顺手看一眼） |
-| `roleplay.proactiveCooldownSeconds` | `180`                          | 群聊主动探头的基础冷却时间（秒，探头后沉默会自动指数退避） |
+| `roleplay.proactive.enabled`        | `true`                         | 是否开启群聊潜水主动探头（非线性激活 + 概率采样）       |
+| `roleplay.proactive.cooldownSeconds`| `180`                          | 探头基础冷却时间（秒，探头后沉默会自动指数退避）        |
+| `roleplay.proactive.maxBackoffShift`| `3`                            | 连续探头沉默时的指数退避最大翻倍阶数（`0–16`）          |
+| `roleplay.proactive.halfLifeSeconds`| `45`                           | 热度指数衰减半衰期（秒）                                |
+| `roleplay.proactive.activeWindowSeconds` | `120`                     | 统计活跃发言人数的滑动时间窗口（秒）                    |
+| `roleplay.proactive.idleResetSeconds` | `900`                        | 群内静默超过该时长（秒）后清零连续探头沉默计数          |
+| `roleplay.proactive.midpointHeat`   | `1.8`                          | 非线性激活半激活热度 $h_{50}$（概率达上限一半时的热度） |
+| `roleplay.proactive.steepness`      | `4`                            | 非线性激活陡峭指数 $k$（Hill 系数，抑制零星闲聊）       |
+| `roleplay.proactive.maxProbability` | `0.65`                         | 单条旁听消息触发探头的概率上限（`(0, 1]`）              |
+| `roleplay.proactive.soloDelta`      | `0.05`                         | 单人连发或仅 1 人活跃时的基础热度增量                   |
+| `roleplay.proactive.duoDelta`       | `0.24`                         | 换人发言且窗口内 2 人活跃时的基础热度增量               |
+| `roleplay.proactive.crowdDelta`     | `0.34`                         | 换人发言且窗口内 3 人及以上活跃时的基础热度增量         |
+| `roleplay.proactive.soloImageBonus` | `0.18`                         | 窗口内仅 1 人活跃时发图的附加热度增量                   |
+| `roleplay.proactive.groupImageBonus`| `0.32`                         | 窗口内至少 2 人活跃时发图的附加热度增量                 |
+| `roleplay.proactive.echoBonus`      | `0.45`                         | 换人复读文本或同图接龙时的附加热度增量                  |
 
 ### 模型供应商可选参数
 

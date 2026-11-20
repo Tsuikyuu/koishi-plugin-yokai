@@ -77,6 +77,29 @@ export const GeminiProviderConfig = Schema.Struct({
 })
 export type GeminiProviderConfig = typeof GeminiProviderConfig.Type
 
+const PositiveNumber = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan(0))
+const NonNegativeNumber = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+const ProbabilityCeiling = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1))
+
+export const ProactiveProbeConfig = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  cooldownSeconds: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  maxBackoffShift: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 16 }))),
+  halfLifeSeconds: Schema.optionalKey(PositiveNumber),
+  activeWindowSeconds: Schema.optionalKey(PositiveNumber),
+  idleResetSeconds: Schema.optionalKey(NonNegativeNumber),
+  midpointHeat: Schema.optionalKey(PositiveNumber),
+  steepness: Schema.optionalKey(PositiveNumber),
+  maxProbability: Schema.optionalKey(ProbabilityCeiling),
+  soloDelta: Schema.optionalKey(NonNegativeNumber),
+  duoDelta: Schema.optionalKey(NonNegativeNumber),
+  crowdDelta: Schema.optionalKey(NonNegativeNumber),
+  soloImageBonus: Schema.optionalKey(NonNegativeNumber),
+  groupImageBonus: Schema.optionalKey(NonNegativeNumber),
+  echoBonus: Schema.optionalKey(NonNegativeNumber),
+})
+export type ProactiveProbeConfig = typeof ProactiveProbeConfig.Type
+
 export const AppConfig = Schema.Struct({
   version: Schema.Literal(1),
   debug: Schema.optionalKey(Schema.Boolean),
@@ -100,8 +123,7 @@ export const AppConfig = Schema.Struct({
     triggerOnNamePrefix: Schema.optionalKey(Schema.Boolean),
     debounceMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     maxDebounceMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-    proactiveEnabled: Schema.optionalKey(Schema.Boolean),
-    proactiveCooldownSeconds: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    proactive: Schema.optionalKey(ProactiveProbeConfig),
   }),
 })
 export type AppConfig = typeof AppConfig.Type

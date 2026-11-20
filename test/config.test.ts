@@ -6,6 +6,7 @@ import test from "node:test"
 import { Effect, Redacted } from "effect"
 import { Config } from "../src/config/schema"
 import { resolveConfig, resolveModel } from "../src/config/resolve"
+import { DefaultAmbientProbeConfig } from "../src/dialogue/ambient/probe"
 
 const config: Config = {
   version: 1,
@@ -39,10 +40,24 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       debounceMs: 2000,
       maxDebounceMs: 8000,
     })
-    assert.deepEqual(resolved.ambient, {
-      enabled: true,
-      cooldownSeconds: 180,
-    })
+    assert.deepEqual(resolved.ambient, DefaultAmbientProbeConfig)
+    const customProactive = {
+      enabled: false,
+      cooldownSeconds: 60,
+      maxBackoffShift: 4,
+      halfLifeSeconds: 30.5,
+      activeWindowSeconds: 90.5,
+      idleResetSeconds: 600.5,
+      midpointHeat: 1.65,
+      steepness: 4.3,
+      maxProbability: 0.57,
+      soloDelta: 0.02,
+      duoDelta: 0.24,
+      crowdDelta: 0.37,
+      soloImageBonus: 0.18,
+      groupImageBonus: 0.35,
+      echoBonus: 0.57,
+    }
     const customized = await Effect.runPromise(
       resolveConfig(
         Config({
@@ -56,8 +71,7 @@ test("Koishi config keeps file references and resolves files only beneath data/y
             triggerOnNamePrefix: true,
             debounceMs: 1500,
             maxDebounceMs: 6000,
-            proactiveEnabled: false,
-            proactiveCooldownSeconds: 60,
+            proactive: customProactive,
           },
         }),
         root,
@@ -74,18 +88,38 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       debounceMs: 1500,
       maxDebounceMs: 6000,
     })
-    assert.deepEqual(customized.ambient, {
-      enabled: false,
-      cooldownSeconds: 60,
-    })
-    assert.equal(
-      (
-        await Effect.runPromiseExit(
-          resolveConfig({ ...config, roleplay: { character: "companion", proactiveCooldownSeconds: -1 } }, root),
-        )
-      )._tag,
-      "Failure",
-    )
+    assert.deepEqual(customized.ambient, customProactive)
+    for (const invalidProactive of [
+      { cooldownSeconds: -1 },
+      { cooldownSeconds: 1.5 },
+      { maxBackoffShift: -1 },
+      { maxBackoffShift: 17 },
+      { maxBackoffShift: 1.5 },
+      { halfLifeSeconds: 0 },
+      { halfLifeSeconds: -5 },
+      { activeWindowSeconds: 0 },
+      { idleResetSeconds: -1 },
+      { midpointHeat: 0 },
+      { steepness: 0 },
+      { maxProbability: 0 },
+      { maxProbability: 1.01 },
+      { soloDelta: -0.01 },
+      { duoDelta: -0.01 },
+      { crowdDelta: -0.01 },
+      { soloImageBonus: -0.01 },
+      { groupImageBonus: -0.01 },
+      { echoBonus: -0.01 },
+    ]) {
+      assert.throws(() => Config({ ...config, roleplay: { character: "companion", proactive: invalidProactive } }))
+      assert.equal(
+        (
+          await Effect.runPromiseExit(
+            resolveConfig({ ...config, roleplay: { character: "companion", proactive: invalidProactive } }, root),
+          )
+        )._tag,
+        "Failure",
+      )
+    }
     assert.equal(
       (
         await Effect.runPromiseExit(

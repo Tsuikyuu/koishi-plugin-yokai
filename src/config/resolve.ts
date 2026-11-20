@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path"
 import { Effect, Redacted, Schema } from "effect"
 import { CharacterId } from "../characters/character"
 import { resolvePresetPath } from "../characters/file-catalog"
+import { DefaultAmbientProbeConfig } from "../dialogue/ambient/probe"
 import { AppConfig } from "./validation"
 import { ConfigurationError } from "./error"
 import type { Config } from "./config"
@@ -82,8 +83,22 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
       maxDebounceMs,
     },
     ambient: {
-      enabled: config.roleplay.proactiveEnabled ?? true,
-      cooldownSeconds: config.roleplay.proactiveCooldownSeconds ?? 180,
+      enabled: config.roleplay.proactive?.enabled ?? DefaultAmbientProbeConfig.enabled,
+      cooldownSeconds: config.roleplay.proactive?.cooldownSeconds ?? DefaultAmbientProbeConfig.cooldownSeconds,
+      maxBackoffShift: config.roleplay.proactive?.maxBackoffShift ?? DefaultAmbientProbeConfig.maxBackoffShift,
+      halfLifeSeconds: config.roleplay.proactive?.halfLifeSeconds ?? DefaultAmbientProbeConfig.halfLifeSeconds,
+      activeWindowSeconds:
+        config.roleplay.proactive?.activeWindowSeconds ?? DefaultAmbientProbeConfig.activeWindowSeconds,
+      idleResetSeconds: config.roleplay.proactive?.idleResetSeconds ?? DefaultAmbientProbeConfig.idleResetSeconds,
+      midpointHeat: config.roleplay.proactive?.midpointHeat ?? DefaultAmbientProbeConfig.midpointHeat,
+      steepness: config.roleplay.proactive?.steepness ?? DefaultAmbientProbeConfig.steepness,
+      maxProbability: config.roleplay.proactive?.maxProbability ?? DefaultAmbientProbeConfig.maxProbability,
+      soloDelta: config.roleplay.proactive?.soloDelta ?? DefaultAmbientProbeConfig.soloDelta,
+      duoDelta: config.roleplay.proactive?.duoDelta ?? DefaultAmbientProbeConfig.duoDelta,
+      crowdDelta: config.roleplay.proactive?.crowdDelta ?? DefaultAmbientProbeConfig.crowdDelta,
+      soloImageBonus: config.roleplay.proactive?.soloImageBonus ?? DefaultAmbientProbeConfig.soloImageBonus,
+      groupImageBonus: config.roleplay.proactive?.groupImageBonus ?? DefaultAmbientProbeConfig.groupImageBonus,
+      echoBonus: config.roleplay.proactive?.echoBonus ?? DefaultAmbientProbeConfig.echoBonus,
     },
     timezone: config.timezone ?? "Asia/Shanghai",
   }

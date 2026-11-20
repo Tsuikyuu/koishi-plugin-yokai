@@ -6,13 +6,50 @@ import type { ProactiveTrigger } from "../next-reply/triggers"
 export interface AmbientProbeConfig {
   readonly enabled: boolean
   readonly cooldownSeconds: number
+  readonly maxBackoffShift: number
+  readonly halfLifeSeconds: number
+  readonly activeWindowSeconds: number
+  readonly idleResetSeconds: number
+  readonly midpointHeat: number
+  readonly steepness: number
+  readonly maxProbability: number
+  readonly soloDelta: number
+  readonly duoDelta: number
+  readonly crowdDelta: number
+  readonly soloImageBonus: number
+  readonly groupImageBonus: number
+  readonly echoBonus: number
+}
+
+export const DefaultAmbientProbeConfig: AmbientProbeConfig = {
+  enabled: true,
+  cooldownSeconds: 180,
+  maxBackoffShift: 3,
+  halfLifeSeconds: 45,
+  activeWindowSeconds: 120,
+  idleResetSeconds: 900,
+  midpointHeat: 1.8,
+  steepness: 4,
+  maxProbability: 0.65,
+  soloDelta: 0.05,
+  duoDelta: 0.24,
+  crowdDelta: 0.34,
+  soloImageBonus: 0.18,
+  groupImageBonus: 0.32,
+  echoBonus: 0.45,
 }
 
 export type AmbientObservation =
   | { readonly status: "disabled" }
   | { readonly status: "cooling"; readonly remainingSeconds: number }
-  | { readonly status: "accumulating"; readonly heat: number }
-  | { readonly status: "triggered"; readonly trigger: ProactiveTrigger; readonly cooldownSeconds: number }
+  | { readonly status: "accumulating"; readonly heat: number; readonly probability: number }
+  | {
+      readonly status: "triggered"
+      readonly trigger: ProactiveTrigger
+      readonly heat: number
+      readonly probability: number
+      readonly cooldownSeconds: number
+    }
 
 export interface AmbientProbeResult {
   readonly silentStreak: number

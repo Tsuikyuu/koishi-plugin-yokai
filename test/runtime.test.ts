@@ -923,14 +923,20 @@ test(
       return f.ctx.parallel(session, "message", session)
     }
 
+    const testProactive = {
+      enabled: true,
+      cooldownSeconds: 1,
+      midpointHeat: 0.75,
+      steepness: 120,
+      maxProbability: 1,
+    }
     const fork = f.ctx.plugin(yokai, {
       ...f.config,
       roleplay: {
         character: "companion",
         routineEnabled: false,
         debounceMs: 0,
-        proactiveEnabled: true,
-        proactiveCooldownSeconds: 1,
+        proactive: testProactive,
       },
     })
     assert.ok(fork)
@@ -955,8 +961,7 @@ test(
         routineEnabled: false,
         debounceMs: 600,
         maxDebounceMs: 3000,
-        proactiveEnabled: true,
-        proactiveCooldownSeconds: 1,
+        proactive: testProactive,
       },
     })
     await f.ctx.lifecycle.flush()

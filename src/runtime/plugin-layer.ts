@@ -292,9 +292,9 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           if (!merged) {
             const probeStatus =
               observation.status === "triggered"
-                ? `触发旁听探头（${observation.trigger.reason}，冷却 ${observation.cooldownSeconds}s）`
+                ? `触发旁听探头（${observation.trigger.reason}，热度 ${observation.heat.toFixed(2)}，概率 ${(observation.probability * 100).toFixed(1)}%，冷却 ${observation.cooldownSeconds}s）`
                 : observation.status === "accumulating"
-                  ? `未触发（探头热度 ${observation.heat.toFixed(2)}/1.00）`
+                  ? `未触发（探头热度 ${observation.heat.toFixed(2)}，触发概率 ${(observation.probability * 100).toFixed(1)}%）`
                   : observation.status === "cooling"
                     ? `未触发（探头冷却剩余 ${observation.remainingSeconds}s）`
                     : "未触发"

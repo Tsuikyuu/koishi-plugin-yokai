@@ -1,4 +1,9 @@
-import type { DeepSeekProviderConfig, GeminiProviderConfig, OpenAIProviderConfig } from "./validation"
+import type {
+  DeepSeekProviderConfig,
+  GeminiProviderConfig,
+  OpenAIProviderConfig,
+  ProactiveProbeConfig,
+} from "./validation"
 
 export interface Config {
   readonly version: 1
@@ -23,7 +28,6 @@ export interface Config {
     readonly triggerOnNamePrefix?: boolean
     readonly debounceMs?: number
     readonly maxDebounceMs?: number
-    readonly proactiveEnabled?: boolean
-    readonly proactiveCooldownSeconds?: number
+    readonly proactive?: ProactiveProbeConfig
   }
 }
