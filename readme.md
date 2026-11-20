@@ -5,7 +5,7 @@ Koishi AI 角色扮演插件。
 ## 快速开始
 
 1. **启用依赖服务**：确保 Koishi 已启用 `http` 插件和任一 `database` 插件（如 `database-sqlite`）。
-2. **放置角色文件**：在 `data/yokai/characters/` 下创建角色预设文件（如 `companion.yml`，格式见下方模板）。
+2. **角色预设文件**：首次启动会自动在 `data/yokai/characters/` 下生成内置默认角色「小追求」预设文件 `default.yml`，可直接修改或新增其他角色 YAML 文件（格式见下方模板）。
 
 ### 基础配置项
 
@@ -15,8 +15,8 @@ Koishi AI 角色扮演插件。
 | `timezone`                | `Asia/Shanghai`                | 角色日程与定时任务使用的 IANA 时区                      |
 | `models.default`          | `deepseek/deepseek-chat`       | 当前使用的模型（`provider/model`）                      |
 | `characters.directory`    | `characters`                   | 角色预设目录（相对于 `data/yokai/`）                    |
-| `characters.presets`      | `{ companion: companion.yml }` | 角色 ID 到 YAML 文件相对路径的映射                      |
-| `roleplay.character`           | `companion`                    | 新频道首次触发时绑定的默认角色 ID（已有频道保持原绑定） |
+| `characters.presets`      | `{ default: default.yml }`     | 角色 ID 到 YAML 文件相对路径的映射                      |
+| `roleplay.character`           | `default`                      | 新频道首次触发时绑定的默认角色 ID（已有频道保持原绑定） |
 | `roleplay.routineEnabled`      | `true`                         | 是否在启动时生成角色日常作息并在对话中启用日程          |
 | `roleplay.triggerOnAt`         | `true`                         | 群聊中 `@` 机器人时是否触发生成                         |
 | `roleplay.triggerOnQuote`      | `true`                         | 群聊中引用机器人消息时是否触发生成                      |
@@ -69,7 +69,7 @@ Koishi AI 角色扮演插件。
 version: 1
 
 character:
-  id: companion # 需与 characters.presets 中的键名一致
+  id: default # 需与 characters.presets 中的键名一致
   name: 小追求
   aliases:
     - 小追求

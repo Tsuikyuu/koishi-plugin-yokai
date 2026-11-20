@@ -6,7 +6,7 @@
   "typings": "lib/index.d.ts",
   "files": [
     "lib",
-    "dist"
+    "presets"
   ],
   "license": "MIT",
   "keywords": [

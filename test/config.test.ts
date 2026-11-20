@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { Effect, Redacted } from "effect"
+import { CharacterCatalog } from "../src/characters/catalog"
+import { CharacterCatalogLocal } from "../src/characters/file-catalog"
 import { Config } from "../src/config/schema"
 import { resolveConfig, resolveModel } from "../src/config/resolve"
 import { DefaultAmbientProbeConfig } from "../src/dialogue/ambient/probe"
@@ -12,24 +14,43 @@ const config: Config = {
   version: 1,
   timezone: "Asia/Shanghai",
   models: { default: "deepseek/deepseek-chat", deepseek: { apiKey: "fixture-secret" } },
-  characters: { directory: "characters", presets: { companion: "companion.yml" } },
-  roleplay: { character: "companion" },
+  characters: { directory: "characters", presets: { default: "default.yml" } },
+  roleplay: { character: "default" },
 }
 
-test("Koishi config keeps file references and resolves files only beneath data/yokai", async () => {
+test("Koishi config auto-provisions built-in XiaoZhuiQiu default preset without overwriting user edits, and resolves files only beneath data/yokai", async () => {
   const root = await mkdtemp(join(tmpdir(), "yokai-config-"))
   try {
-    await mkdir(join(root, "data/yokai/characters"), { recursive: true })
-    await writeFile(join(root, "data/yokai/characters/companion.yml"), "version: 1\n")
-    const raw = Config(config)
+    const raw = Config({
+      models: config.models,
+    })
     assert.equal(raw.debug, false)
-    assert.deepEqual(raw.characters.presets, { companion: "companion.yml" })
+    assert.deepEqual(raw.characters.presets, { default: "default.yml" })
+    assert.equal(raw.roleplay.character, "default")
     assert.equal("database" in raw, false)
     assert.equal("presets" in raw, false)
     const reactive = new Proxy(raw, { ownKeys: () => [], has: () => false, getOwnPropertyDescriptor: () => undefined })
     const resolved = await Effect.runPromise(resolveConfig(reactive, root))
     assert.equal(resolved.debug, false)
     assert.equal(resolved.directory, join(root, "data/yokai/characters"))
+    assert.equal(resolved.characterId, "default")
+
+    // 空目录首次解析时自动落盘内置「小追求」预设，且可通过目录服务完整校验加载
+    const builtInPreset = await Effect.runPromise(
+      Effect.flatMap(CharacterCatalog, (catalog) => catalog.get(resolved.characterId)).pipe(
+        Effect.provide(CharacterCatalogLocal(resolved.directory, resolved.presets)),
+      ),
+    )
+    assert.equal(builtInPreset.character.id, "default")
+    assert.equal(builtInPreset.character.name, "小追求")
+
+    // 用户编辑过 default.yml 后，再次解析配置不得覆盖已有内容
+    const presetPath = join(root, "data/yokai/characters/default.yml")
+    assert.match(await readFile(presetPath, "utf8"), /# 基本设定/)
+    await writeFile(presetPath, "version: 1 # customized\n")
+    await Effect.runPromise(resolveConfig(reactive, root))
+    assert.equal(await readFile(presetPath, "utf8"), "version: 1 # customized\n")
+
     assert.deepEqual(resolved.triggers, {
       at: true,
       quote: true,
@@ -64,7 +85,7 @@ test("Koishi config keeps file references and resolves files only beneath data/y
           ...config,
           debug: true,
           roleplay: {
-            character: "companion",
+            character: "default",
             triggerOnAt: true,
             triggerOnQuote: false,
             triggerOnName: false,
@@ -110,11 +131,11 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       { groupImageBonus: -0.01 },
       { echoBonus: -0.01 },
     ]) {
-      assert.throws(() => Config({ ...config, roleplay: { character: "companion", proactive: invalidProactive } }))
+      assert.throws(() => Config({ ...config, roleplay: { character: "default", proactive: invalidProactive } }))
       assert.equal(
         (
           await Effect.runPromiseExit(
-            resolveConfig({ ...config, roleplay: { character: "companion", proactive: invalidProactive } }, root),
+            resolveConfig({ ...config, roleplay: { character: "default", proactive: invalidProactive } }, root),
           )
         )._tag,
         "Failure",
@@ -123,7 +144,7 @@ test("Koishi config keeps file references and resolves files only beneath data/y
     assert.equal(
       (
         await Effect.runPromiseExit(
-          resolveConfig({ ...config, roleplay: { character: "companion", debounceMs: 5000, maxDebounceMs: 1000 } }, root),
+          resolveConfig({ ...config, roleplay: { character: "default", debounceMs: 5000, maxDebounceMs: 1000 } }, root),
         )
       )._tag,
       "Failure",
@@ -132,7 +153,8 @@ test("Koishi config keeps file references and resolves files only beneath data/y
       { ...config, timezone: "Invalid/Zone" },
       { ...config, roleplay: { character: "missing" } },
       { ...config, characters: { ...config.characters, directory: "../../escape" } },
-      { ...config, characters: { ...config.characters, presets: { companion: "../escape.yml" } } },
+      { ...config, characters: { ...config.characters, presets: { default: "../escape.yml" } } },
+      { ...config, characters: { ...config.characters, presets: { custom: "missing.yml" } }, roleplay: { character: "custom" } },
     ]) {
       assert.equal((await Effect.runPromiseExit(resolveConfig(invalid, root)))._tag, "Failure")
     }

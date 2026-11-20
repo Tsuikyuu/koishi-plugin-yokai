@@ -63,7 +63,7 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
   try {
     const serialize = (await Effect.runPromise(Semaphore.make(1))).withPermit
     const layer = stickerStoreLayer(ctx.database, serialize, stickerDir)
-    const companion = Schema.decodeSync(CharacterId)("companion")
+    const defaultCharacter = Schema.decodeSync(CharacterId)("default")
     const another = Schema.decodeSync(CharacterId)("another")
     const sleepy = Schema.decodeSync(StickerId)("sleepy")
     const speechless = Schema.decodeSync(StickerId)("无语")
@@ -72,7 +72,7 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
       Effect.gen(function* () {
         const stickers = yield* CharacterStickers
         const created = yield* stickers.save({
-          characterId: companion,
+          characterId: defaultCharacter,
           id: sleepy,
           summary: "趴在被窝里困得睁不开眼",
           sha256: sha256Of(webp),
@@ -85,7 +85,7 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
         // 同一角色不允许重复 ID 或重复画面内容
         const duplicateId = yield* stickers
           .save({
-            characterId: companion,
+            characterId: defaultCharacter,
             id: sleepy,
             summary: "另一张图",
             sha256: sha256Of(png),
@@ -97,7 +97,7 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
 
         const duplicateHash = yield* stickers
           .save({
-            characterId: companion,
+            characterId: defaultCharacter,
             id: speechless,
             summary: "同一张图换个名字",
             sha256: sha256Of(webp),
@@ -117,15 +117,15 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
           bytes: webp,
         })
 
-        const updated = yield* stickers.update(companion, sleepy, "赖床不想起，用于犯困")
+        const updated = yield* stickers.update(defaultCharacter, sleepy, "赖床不想起，用于犯困")
         assert.equal(updated.summary, "赖床不想起，用于犯困")
-        const loaded = yield* stickers.load(companion, sleepy)
+        const loaded = yield* stickers.load(defaultCharacter, sleepy)
         assert.equal(loaded.summary, "赖床不想起，用于犯困")
         assert.deepEqual(Array.from(loaded.bytes), Array.from(webp))
 
         // 删除其中一个角色的引用后，另一个角色仍可正常读取该文件
-        yield* stickers.remove(companion, sleepy)
-        assert.deepEqual(yield* stickers.list(companion), [])
+        yield* stickers.remove(defaultCharacter, sleepy)
+        assert.deepEqual(yield* stickers.list(defaultCharacter), [])
         const stillAvailable = yield* stickers.load(another, sleepy)
         assert.deepEqual(Array.from(stillAvailable.bytes), Array.from(webp))
 
@@ -134,14 +134,14 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
         const filesAfterRemove = (yield* Effect.promise(() => readdir(stickerDir))).filter((name) => !name.endsWith(".tmp"))
         assert.deepEqual(filesAfterRemove, [])
 
-        const missing = yield* stickers.load(companion, sleepy).pipe(Effect.result)
+        const missing = yield* stickers.load(defaultCharacter, sleepy).pipe(Effect.result)
         assert.ok(missing._tag === "Failure" && missing.failure instanceof StickerNotFound)
 
         // 验证单角色定容上限
         for (let index = 0; index < MaxCharacterStickers; index++) {
           const itemBytes = new Uint8Array([...png, index])
           yield* stickers.save({
-            characterId: companion,
+            characterId: defaultCharacter,
             id: Schema.decodeSync(StickerId)(`s_${index}`),
             summary: `表情 ${index}`,
             sha256: sha256Of(itemBytes),
@@ -149,11 +149,11 @@ test("dynamic sticker store persists metadata and files, enforces capacity/uniqu
             bytes: itemBytes,
           })
         }
-        assert.equal((yield* stickers.list(companion)).length, MaxCharacterStickers)
+        assert.equal((yield* stickers.list(defaultCharacter)).length, MaxCharacterStickers)
         const overflowBytes = new Uint8Array([...png, 250])
         const overflow = yield* stickers
           .save({
-            characterId: companion,
+            characterId: defaultCharacter,
             id: Schema.decodeSync(StickerId)("overflow"),
             summary: "超出上限",
             sha256: sha256Of(overflowBytes),
@@ -176,7 +176,7 @@ test("character preset schema no longer accepts static stickers configuration", 
     Schema.decodeUnknownSync(CharacterPreset, { onExcessProperty: "error" })({
       version: 1,
       character: {
-        id: "companion",
+        id: "default",
         name: "小追求",
         aliases: [],
         basicSetting: "设定",
@@ -396,11 +396,11 @@ test("image bytes stop at the declared per-image limit", () => {
 })
 
 test("context skips known/self stickers in attachment window and renders dynamic stickers in user message", () => {
-  const characterId = Schema.decodeSync(CharacterId)("companion")
+  const characterId = Schema.decodeSync(CharacterId)("default")
   const preset = Schema.decodeSync(CharacterPreset)({
     version: 1,
     character: {
-      id: "companion",
+      id: "default",
       name: "小追求",
       aliases: [],
       basicSetting: "设定",
@@ -552,11 +552,11 @@ test("character saves a sticker from group chat and manages/reuses it globally a
       ),
     )
     try {
-      const characterId = Schema.decodeSync(CharacterId)("companion")
+      const characterId = Schema.decodeSync(CharacterId)("default")
       const preset = Schema.decodeSync(CharacterPreset)({
         version: 1,
         character: {
-          id: "companion",
+          id: "default",
           name: "小追求",
           aliases: [],
           basicSetting: "设定",

@@ -59,7 +59,7 @@ const preset = (
 ) => ({
   version: 1,
   character: {
-    id: "companion",
+    id: "default",
     name: "Yokai",
     aliases,
     basicSetting: setting,
@@ -93,7 +93,7 @@ const addBot = (ctx: Context, sent: string[]) => {
 
 const fixture = async (t: TestContext) => {
   const directory = await mkdtemp(join(tmpdir(), "yokai-lifecycle-"))
-  const filename = join(directory, "data/yokai/characters/companion.yml")
+  const filename = join(directory, "data/yokai/characters/default.yml")
   await mkdir(join(directory, "data/yokai/characters"), { recursive: true })
   await writeFile(filename, stringify(preset("original-setting")))
   const calls: Call[] = []
@@ -155,8 +155,8 @@ const fixture = async (t: TestContext) => {
         timeoutMs: 10000,
       },
     },
-    characters: { directory: "characters", presets: { companion: "companion.yml" } },
-    roleplay: { character: "companion", debounceMs: 0 },
+    characters: { directory: "characters", presets: { default: "default.yml" } },
+    roleplay: { character: "default", debounceMs: 0 },
   }
   const incoming = (id: string, channelId: string) => {
     const session = bot.session({
@@ -477,7 +477,7 @@ test(
     })
     await f.receive("seed-schedule", "room-a")
     const [channelA] = await f.ctx.database.get("channel", { platform: "lifecycle-test", id: "room-a" })
-    assert.equal(channelA?.yokaiPreset, "companion")
+    assert.equal(channelA?.yokaiPreset, "default")
     const due = new Date()
     await f.ctx.database.create("yokai_schedule", {
       id: randomUUID(),
@@ -554,7 +554,7 @@ test(
     }
 
     const baseRoleplay = {
-      character: "companion",
+      character: "default",
       routineEnabled: false,
       triggerOnAt: false,
       triggerOnQuote: false,
@@ -713,7 +713,7 @@ test(
     const fork = f.ctx.plugin(yokai, {
       ...f.config,
       roleplay: {
-        character: "companion",
+        character: "default",
         routineEnabled: false,
         triggerOnAt: true,
         triggerOnQuote: true,
@@ -790,7 +790,7 @@ test(
     fork.update({
       ...f.config,
       roleplay: {
-        character: "companion",
+        character: "default",
         routineEnabled: false,
         debounceMs: 2500,
         maxDebounceMs: 8000,
@@ -817,7 +817,7 @@ test(
     const roleplayConfig: Config = {
       ...f.config,
       roleplay: {
-        character: "companion",
+        character: "default",
         routineEnabled: false,
         debounceMs: 0,
       },
@@ -933,7 +933,7 @@ test(
     const fork = f.ctx.plugin(yokai, {
       ...f.config,
       roleplay: {
-        character: "companion",
+        character: "default",
         routineEnabled: false,
         debounceMs: 0,
         proactive: testProactive,
@@ -957,7 +957,7 @@ test(
     fork.update({
       ...f.config,
       roleplay: {
-        character: "companion",
+        character: "default",
         routineEnabled: false,
         debounceMs: 600,
         maxDebounceMs: 3000,
@@ -1106,7 +1106,7 @@ test(
     const fork = f.ctx.plugin(yokai, {
       ...f.config,
       roleplay: {
-        character: "companion",
+        character: "default",
         routineEnabled: false,
         debounceMs: 0,
       },

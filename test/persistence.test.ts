@@ -27,7 +27,7 @@ const close = async (ctx: Context) => {
   await ctx.stop()
   await ctx.lifecycle.flush()
 }
-const preset = Schema.decodeSync(CharacterId)("companion")
+const preset = Schema.decodeSync(CharacterId)("default")
 const key = { platform: "test", channelId: "room" }
 const otherKey = { platform: "test", channelId: "other-room" }
 const state = { emotion: "calm", condition: "well", activity: "reading", short_memory: "hello" }

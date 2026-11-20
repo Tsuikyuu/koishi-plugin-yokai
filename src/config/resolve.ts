@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path"
 import { Effect, Redacted, Schema } from "effect"
 import { CharacterId } from "../characters/character"
+import { ensureDefaultPresetFile } from "../characters/default-preset"
 import { resolvePresetPath } from "../characters/file-catalog"
 import { DefaultAmbientProbeConfig } from "../dialogue/ambient/probe"
 import { AppConfig } from "./validation"
@@ -59,6 +60,7 @@ export const resolveConfig = Effect.fn("Yokai.resolveConfig")(function* (raw: Co
   if (!entries.some(([id]) => id === config.roleplay.character)) {
     return yield* Effect.fail(fail("roleplay.character", "未找到默认角色预设"))
   }
+  yield* ensureDefaultPresetFile(dataDirectory, directory, entries)
   yield* Effect.forEach(entries, ([id, file]) => resolvePresetPath(directory, file, id))
   const debounceMs = config.roleplay.debounceMs ?? 2000
   const maxDebounceMs = config.roleplay.maxDebounceMs ?? Math.max(8000, debounceMs)

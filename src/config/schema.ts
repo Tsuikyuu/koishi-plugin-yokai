@@ -2,6 +2,7 @@ import { Schema } from "koishi"
 import { ReasoningContexts, ReasoningEfforts, ReasoningModes, VerbosityLevels } from "../models/openai/config"
 import { ReasoningEfforts as DeepSeekReasoningEfforts } from "../models/deepseek/config"
 import { SafetyCategories, SafetyThresholds, ThinkingLevels } from "../models/gemini/config"
+import { DefaultCharacterFilename, DefaultCharacterId } from "../characters/default-preset"
 import { DefaultAmbientProbeConfig } from "../dialogue/ambient/probe"
 import { DefaultBaseUrl } from "../models/provider"
 import type { Config as PluginConfig } from "./config"
@@ -91,11 +92,11 @@ export const Config: Schema<any, Config> = Schema.intersect([
         .default("characters")
         .description("角色文件目录，相对于 Koishi 的 data/yokai；必须位于该目录内"),
       presets: Schema.dict(String)
-        .default({ companion: "companion.yml" })
+        .default({ [DefaultCharacterId]: DefaultCharacterFilename })
         .description("角色 ID 到 YAML 文件相对路径的映射；预设正文保存在文件中"),
     }),
     roleplay: Schema.object({
-      character: Schema.string().default("companion").description("新频道绑定的默认角色 ID"),
+      character: Schema.string().default(DefaultCharacterId).description("新频道绑定的默认角色 ID"),
       routineEnabled: Schema.boolean()
         .default(true)
         .description("启用角色日程：启动时生成日常时间表，并在对话中拼装日程上下文和提供日程调整动作"),

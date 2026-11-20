@@ -105,7 +105,7 @@ const action = Schema.decodeSync(MessageAction)({ type: "message", parts: [{ typ
 const channelFor = (key: ChannelKey): Channel => ({
   ...key,
   id: channelIdOf(key),
-  presetId: Schema.decodeSync(CharacterId)("companion"),
+  presetId: Schema.decodeSync(CharacterId)("default"),
   state: { emotion: "calm", condition: "well", activity: "reading", short_memory: "" },
 })
 
@@ -407,7 +407,7 @@ test("syncBot and invalidateBot backfill only missed messages across offline gap
     await f.app.database.createChannel("test-platform", "room", {
       assignee: "bot",
       guildId: "guild",
-      yokaiPreset: "companion",
+      yokaiPreset: "default",
     })
     await f.app.database.create("yokai_history", {
       platform: "test-platform",
@@ -465,7 +465,7 @@ test("realtime incoming message arriving while syncBot is fetching is not swallo
     await f.app.database.createChannel("test-platform", "room", {
       assignee: "bot",
       guildId: "guild",
-      yokaiPreset: "companion",
+      yokaiPreset: "default",
     })
     let releaseFetch: (() => void) | undefined
     const fetchGate = new Promise<void>((resolve) => {
