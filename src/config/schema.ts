@@ -91,7 +91,11 @@ export const Config: Schema<any, Config> = Schema.intersect([
       directory: Schema.string()
         .default("characters")
         .description("角色文件目录，相对于 Koishi 的 data/yokai；必须位于该目录内"),
-      presets: Schema.dict(String)
+      presets: Schema.dict(
+        Schema.string().min(1).description("YAML 文件相对路径"),
+        Schema.string().min(1).description("角色 ID"),
+      )
+        .role("table")
         .default({ [DefaultCharacterId]: DefaultCharacterFilename })
         .description("角色 ID 到 YAML 文件相对路径的映射；预设正文保存在文件中"),
     }),

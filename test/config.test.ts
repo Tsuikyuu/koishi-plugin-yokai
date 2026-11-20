@@ -26,6 +26,7 @@ test("Koishi config auto-provisions built-in XiaoZhuiQiu default preset without 
     })
     assert.equal(raw.debug, false)
     assert.deepEqual(raw.characters.presets, { default: "default.yml" })
+    assert.equal(Config.list?.[1]?.dict?.characters?.dict?.presets?.meta.role, "table")
     assert.equal(raw.roleplay.character, "default")
     assert.equal("database" in raw, false)
     assert.equal("presets" in raw, false)
