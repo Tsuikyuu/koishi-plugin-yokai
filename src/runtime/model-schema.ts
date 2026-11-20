@@ -45,9 +45,10 @@ interface ProviderCatalogGroup {
 // 固定本次配置快照；网络返回前及失败时仍保留当前值可选。
 export const registerModelSchema = Effect.fn("Yokai.registerModelSchema")(
   function* (ctx: Context, models: Config["models"], support?: ImageSupport) {
-    const selected = models.default
+    const selected = models.default?.trim() || undefined
+    const initial = selected ? [selected] : []
     const sources = candidates(models)
-    yield* Effect.sync(() => ctx.schema.set(ModelSchemaName, catalogSchema([selected])))
+    yield* Effect.sync(() => ctx.schema.set(ModelSchemaName, catalogSchema(initial)))
     const http = yield* ModelHttp
     const groups = yield* Effect.forEach(
       sources,
@@ -95,7 +96,7 @@ export const registerModelSchema = Effect.fn("Yokai.registerModelSchema")(
         return next
       })
     }
-    yield* Effect.sync(() => ctx.schema.set(ModelSchemaName, catalogSchema([selected, ...entries.map((e) => e.key)])))
+    yield* Effect.sync(() => ctx.schema.set(ModelSchemaName, catalogSchema([...initial, ...entries.map((e) => e.key)])))
   },
 )
 

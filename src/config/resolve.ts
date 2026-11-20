@@ -18,13 +18,15 @@ export const resolveModel = Effect.fn("Yokai.resolveModel")(function* (
   const models = yield* Schema.decodeUnknownEffect(AppConfig.fields.models, { onExcessProperty: "error" })(raw).pipe(
     Effect.mapError(() => fail("models", "模型配置不符合契约")),
   )
-  const provider = models.default.slice(0, models.default.indexOf("/")) as Provider
+  const selected = models.default?.trim()
+  if (!selected) return yield* Effect.fail(fail("models.default", "尚未选择模型"))
+  const provider = selected.slice(0, selected.indexOf("/")) as Provider
   const settings = models[provider]
   if (!settings) return yield* Effect.fail(fail(`models.${provider}`, "缺少所选模型的供应商配置"))
   const { apiKey } = settings
   if (!apiKey?.trim()) return yield* Effect.fail(fail(`models.${provider}.apiKey`, "所选模型的 API 密钥为空"))
   const resolved = {
-    model: models.default.slice(provider.length + 1),
+    model: selected.slice(provider.length + 1),
     timeoutMs: settings.timeoutMs ?? 60000,
     apiKey: Redacted.make(apiKey),
   }

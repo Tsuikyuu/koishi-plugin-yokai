@@ -170,6 +170,8 @@ test("selected model credentials remain redacted and model updates validate inde
   assert.equal(Redacted.value(resolved.apiKey), "fixture-secret")
   assert.equal(JSON.stringify(resolved).includes("fixture-secret"), false)
   const invalid = [
+    {},
+    { default: "" },
     { default: "other/model", deepseek: { apiKey: "fixture-secret" } },
     { default: "openai/model" },
     { default: "gemini/model" },
@@ -188,6 +190,23 @@ test("selected model credentials remain redacted and model updates validate inde
   ]
   for (const models of invalid) {
     assert.equal((await Effect.runPromiseExit(resolveModel(models)))._tag, "Failure")
+  }
+})
+
+test("Koishi config leaves models.default unselected instead of hardcoding a provider", async () => {
+  const root = await mkdtemp(join(tmpdir(), "yokai-config-unselected-"))
+  try {
+    const raw = Config({
+      models: {
+        gemini: { apiKey: "fixture-secret" },
+      },
+    })
+    assert.equal(raw.models.default, undefined)
+    const resolved = await Effect.runPromise(resolveConfig(raw, root))
+    assert.equal(resolved.characterId, "default")
+    assert.equal((await Effect.runPromiseExit(resolveModel(raw.models)))._tag, "Failure")
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })
 

@@ -807,6 +807,18 @@ test("Gemini model catalog paginates, filters generation models and registers dr
   assert.ok(!options.includes("embedding"))
 })
 
+test("model catalog omits empty selection when models.default is not yet chosen", async (t) => {
+  const { app, baseUrl } = await fixture(t, (_request, response) => {
+    json(response, {
+      models: [{ name: "models/gemini-only", supportedGenerationMethods: ["generateContent"] }],
+    })
+  })
+  await Effect.runPromise(registerModelSchema(app, {
+    gemini: { apiKey: Redacted.value(key), baseUrl: `${baseUrl}/v1beta` },
+  }).pipe(Effect.provide(ModelHttpKoishi(app.http))))
+  assert.deepEqual(app.schema.get(ModelSchemaName).list?.map((option) => option.value), ["gemini/gemini-only"])
+})
+
 test("Gemini total timeout aborts the native HTTP response", async (t) => {
   let markClosed = () => {}
   const closed = new Promise<void>((resolve) => { markClosed = resolve })

@@ -13,7 +13,7 @@ Koishi AI 角色扮演插件。
 | ------------------------- | ------------------------------ | ------------------------------------------------------- |
 | `debug`                   | `false`                        | 是否开启调试模式（开启后打印调试日志并将模型调用记录写入 `data/yokai/logs`） |
 | `timezone`                | `Asia/Shanghai`                | 角色日程与定时任务使用的 IANA 时区                      |
-| `models.default`          | `deepseek/deepseek-chat`       | 当前使用的模型（`provider/model`）                      |
+| `models.default`          | （空，需选择）                 | 当前使用的模型（`provider/model`）；填入任一供应商密钥并启用插件后自动获取列表 |
 | `characters.directory`    | `characters`                   | 角色预设目录（相对于 `data/yokai/`）                    |
 | `characters.presets`      | `{ default: default.yml }`     | 角色 ID 到 YAML 文件相对路径的映射                      |
 | `roleplay.character`           | `default`                      | 新频道首次触发时绑定的默认角色 ID（已有频道保持原绑定） |

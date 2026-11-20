@@ -100,12 +100,14 @@ export const ProactiveProbeConfig = Schema.Struct({
 })
 export type ProactiveProbeConfig = typeof ProactiveProbeConfig.Type
 
+const ModelId = NonEmpty.check(Schema.isPattern(/^(deepseek|openai|gemini)\/[^\s/]+(?:\/[^\s/]+)*$/))
+
 export const AppConfig = Schema.Struct({
   version: Schema.Literal(1),
   debug: Schema.optionalKey(Schema.Boolean),
   timezone: Schema.optionalKey(TimeZone),
   models: Schema.Struct({
-    default: NonEmpty.check(Schema.isPattern(/^(deepseek|openai|gemini)\/[^\s/]+(?:\/[^\s/]+)*$/)),
+    default: Schema.optional(Schema.Union([Schema.Literal(""), ModelId])),
     deepseek: Schema.optionalKey(DeepSeekProviderConfig),
     openai: Schema.optionalKey(OpenAIProviderConfig),
     gemini: Schema.optionalKey(GeminiProviderConfig),

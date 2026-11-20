@@ -30,8 +30,7 @@ export const Config: Schema<any, Config> = Schema.intersect([
     timezone: Schema.string().default("Asia/Shanghai").description("角色日程和新建定时任务的 IANA 时区"),
     models: Schema.object({
       default: Schema.dynamic(ModelSchemaName)
-        .default("deepseek/deepseek-chat")
-        .description("当前模型，格式为 provider/model；列表由供应商自动获取"),
+        .description("当前模型，格式为 provider/model；填入任一供应商 API 密钥并启用插件后由供应商自动获取可选列表"),
       deepseek: Schema.object({
         ...provider,
         reasoningEffort: Schema.union(DeepSeekReasoningEfforts)

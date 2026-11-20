@@ -55,6 +55,21 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const config = yield* resolveConfig(raw, ctx.baseDir)
+      const http = ModelHttpKoishi(ctx.http)
+      const imageSupport = yield* makeImageSupport()
+      // 模型列表是控制台输入选项，失败只影响可选项，不阻断插件启动。
+      yield* watchModelSchema(ctx, raw.models, imageSupport).pipe(Effect.provide(http))
+      // 未选择模型时保持插件存活以拉取可选模型列表，待选定模型后再自动重载进入运行态。
+      if (!raw.models.default?.trim()) {
+        yield* Effect.logWarning(
+          "尚未选择当前模型（models.default），请先在配置中选择模型；填入任一供应商 API 密钥后会自动获取可选列表",
+        )
+        yield* Effect.acquireRelease(
+          Effect.sync(() => ctx.accept(["models"], (updated: Config) => Boolean(updated.models.default?.trim()))),
+          (dispose) => Effect.sync(dispose),
+        )
+        return
+      }
       const databaseGate = yield* Semaphore.make(1)
       const base = yield* Layer.build(
         Layer.mergeAll(
@@ -63,10 +78,6 @@ export const pluginLayer = (ctx: Context, raw: Config) =>
           ModelTraceStoreFile(join(config.dataDirectory, "logs")),
         ),
       )
-      const http = ModelHttpKoishi(ctx.http)
-      const imageSupport = yield* makeImageSupport()
-      // 模型列表是控制台输入选项，失败只影响可选项，不阻断插件启动。
-      yield* watchModelSchema(ctx, raw.models, imageSupport).pipe(Effect.provide(http))
       const catalog = () => CharacterCatalogLocal(config.directory, config.presets)
       const modelLayer = Effect.gen(function* () {
         const selected = yield* resolveModel(raw.models)

@@ -10,7 +10,7 @@ export interface Config {
   readonly debug?: boolean
   readonly timezone: string
   readonly models: {
-    readonly default: string
+    readonly default?: string | undefined
     readonly deepseek?: DeepSeekProviderConfig
     readonly openai?: OpenAIProviderConfig
     readonly gemini?: GeminiProviderConfig

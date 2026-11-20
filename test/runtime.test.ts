@@ -1186,3 +1186,102 @@ test(
     await f.ctx.lifecycle.flush()
   },
 )
+
+test(
+  "plugin starts cleanly without models.default, populates configured provider models, and activates once a model is chosen",
+  { timeout: 15000 },
+  async (t) => {
+    const intervals = trackIntervals(t)
+    const f = await fixture(t)
+    const baselineHooks = f.hookCount()
+    const baselineTimers = intervals.size
+    const geminiRequests: string[] = []
+    const geminiServer = createServer((request, response) => {
+      geminiRequests.push(`${request.method} ${request.url}`)
+      response.setHeader("Content-Type", "application/json")
+      if (request.method === "GET" && request.url === "/v1beta/models") {
+        response.end(
+          JSON.stringify({
+            models: [{ name: "models/gemini-test", supportedGenerationMethods: ["generateContent"] }],
+          }),
+        )
+        return
+      }
+      if (request.method === "POST" && request.url === "/v1beta/models/gemini-test:generateContent") {
+        const chunks: Buffer[] = []
+        request.on("data", (chunk: Buffer) => chunks.push(chunk))
+        request.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { tools?: unknown }
+          const text =
+            body.tools === undefined
+              ? routine
+              : "<response><think/><actions><message>gemini ready</message></actions><status/></response>"
+          response.end(JSON.stringify({ candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text }] } }] }))
+        })
+        return
+      }
+      response.statusCode = 404
+      response.end("{}")
+    })
+    await new Promise<void>((resolve) => geminiServer.listen(0, "127.0.0.1", resolve))
+    t.after(async () => {
+      geminiServer.closeAllConnections()
+      await new Promise<void>((resolve) => geminiServer.close(() => resolve()))
+    })
+    const geminiAddress = geminiServer.address()
+    assert.ok(geminiAddress && typeof geminiAddress !== "string")
+    const geminiBaseUrl = `http://127.0.0.1:${geminiAddress.port}/v1beta`
+
+    const schemaUpdated = new Promise<void>((resolve) => {
+      const dispose = f.ctx.on("internal/schema", (name) => {
+        if (name !== "yokai-model") return
+        const values = (f.ctx.schema.get("yokai-model").list ?? []).map((option) => option.value)
+        if (!values.includes("gemini/gemini-test")) return
+        dispose()
+        resolve()
+      })
+    })
+
+    const initialConfig = yokai.Config({
+      models: {
+        gemini: { apiKey: "gemini-secret", baseUrl: geminiBaseUrl, timeoutMs: 10000 },
+      },
+      roleplay: { character: "default", debounceMs: 0 },
+    })
+    assert.equal(initialConfig.models.default, undefined)
+    const fork = f.ctx.plugin(yokai, initialConfig)
+    assert.ok(fork)
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+    assert.equal(f.hookCount(), baselineHooks)
+    assert.equal(intervals.size, baselineTimers)
+    await schemaUpdated
+    assert.deepEqual(
+      (f.ctx.schema.get("yokai-model").list ?? []).map((option) => option.value),
+      ["gemini/gemini-test"],
+    )
+
+    // 选定模型后自动重载并进入运行态（生成日程、挂载监听与定时器并正常回复）
+    fork.update({
+      ...initialConfig,
+      models: {
+        ...initialConfig.models,
+        default: "gemini/gemini-test",
+      },
+    })
+    await f.ctx.lifecycle.flush()
+    assert.ifError(fork.error)
+    assert.equal(f.hookCount(), baselineHooks + 1)
+    assert.equal(intervals.size, baselineTimers + 1)
+
+    await f.receive("first")
+    assert.deepEqual(f.sent, ["gemini ready"])
+    assert.ok(geminiRequests.includes("GET /v1beta/models"))
+    assert.ok(geminiRequests.includes("POST /v1beta/models/gemini-test:generateContent"))
+
+    fork.dispose()
+    await f.ctx.lifecycle.flush()
+    assert.equal(f.hookCount(), baselineHooks)
+    assert.equal(intervals.size, baselineTimers)
+  },
+)
