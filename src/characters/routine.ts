@@ -62,4 +62,8 @@ export const replaceRoutineRange = (routine: CharacterRoutine, update: RoutineAc
 
 export class CharacterRoutineError extends Schema.TaggedError<CharacterRoutineError>()("CharacterRoutineError", {
   reason: Schema.String,
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}

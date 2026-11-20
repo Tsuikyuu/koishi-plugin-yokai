@@ -4,4 +4,8 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()
   path: Schema.String,
   field: Schema.String,
   reason: Schema.String,
-}) {}
+}) {
+  override get message(): string {
+    return `[${this.path}.${this.field}] ${this.reason}`
+  }
+}
