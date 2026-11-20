@@ -751,9 +751,7 @@ export const createKoishiHistory = (
               try: () =>
                 session.bot.sendMessage(session.channelId!, encodeAction(action), session.event.referrer, { session }),
               catch: (error) => new ChannelPlatformError({ operation: "send", detail: describePlatformError(error) }),
-            }).pipe(
-              Effect.tapError((error) => Effect.logWarning(`平台发送失败：${error.detail ?? "未知错误"}`)),
-            )
+            })
             const message = yield* Schema.decodeUnknownEffect(Message)(
               action.type === "sticker"
                 ? {

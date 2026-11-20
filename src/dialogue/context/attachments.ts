@@ -64,10 +64,10 @@ export const selectImages = (
   return selected
 }
 
-const uniqueAvailableImageCount = (
+export const countAvailableImages = (
   history: ChannelHistory,
   trigger: ChannelTrigger,
-  knownStickerHashes: ReadonlySet<string>,
+  knownStickerHashes: ReadonlySet<string> = new Set(),
 ): number => {
   const seen = new Set<string>(knownStickerHashes)
   let count = 0
@@ -95,17 +95,11 @@ export const loadImageAttachments = (
 ) =>
   Effect.gen(function* () {
     const selected = selectImages(history, trigger, knownStickerHashes)
-    const totalAvailable = uniqueAvailableImageCount(history, trigger, knownStickerHashes)
     const attachments: ImageAttachment[] = []
     for (const candidate of selected) {
       const bytes = yield* media.read(candidate.sha256)
       if (bytes === undefined) continue
       attachments.push({ ...candidate, ref: `img_${attachments.length + 1}`, bytes })
-    }
-    if (totalAvailable > selected.length) {
-      yield* Effect.logDebug(
-        `历史窗口共有 ${totalAvailable} 张去重图片，受数量或体积上限约束筛选最新 ${selected.length} 张`,
-      )
     }
     return attachments
   })

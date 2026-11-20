@@ -32,7 +32,8 @@ export class ChannelExecutionError extends Data.TaggedError("ChannelExecutionErr
     | InvalidSchedule
 }> {
   override get message(): string {
-    return `回合提交失败（阶段=${this.stage}，已完成动作=${this.completedActions}，原因=${this.cause._tag}）`
+    const detail = this.cause.message || this.cause._tag
+    return `回合提交失败（阶段=${this.stage}，已完成动作=${this.completedActions}，原因=${detail}）`
   }
 }
 

@@ -26,7 +26,7 @@ import { buildChannelContext } from "./context/build-context"
 import { parseChannelResponse } from "./response/parse-xml"
 import { executeNoteAction, loadRecentNotes } from "../notebook/execute-actions"
 import { generateChannelResponse } from "./tool-loop"
-import { loadImageAttachments } from "./context/attachments"
+import { countAvailableImages, loadImageAttachments } from "./context/attachments"
 import type { MessageAction, StickerDelivery } from "../channels/message-action"
 import type { NoteAction } from "../notebook/note"
 import type { RoutineAction } from "../characters/routine"
@@ -130,7 +130,14 @@ export const ChannelRoleplayLive = (
               : message.content.reduce((count, part) => count + (part.type === "text" ? part.text.length : 0), 0)),
           0,
         )
-        const imageSummary = model.capabilities.imageInput ? `${attachments.length}张` : "不支持"
+        const availableImages = model.capabilities.imageInput
+          ? countAvailableImages(history, trigger, knownStickerHashes)
+          : 0
+        const imageSummary = !model.capabilities.imageInput
+          ? "不支持"
+          : availableImages > attachments.length
+            ? `${attachments.length}/${availableImages}张`
+            : `${attachments.length}张`
         const triggerSummary =
           trigger.type === "message"
             ? `批次=${trigger.messages.length}条${trigger.reason ? `，原因=${trigger.reason}` : ""}`
@@ -156,9 +163,7 @@ export const ChannelRoleplayLive = (
           return { actionsExecuted: 0, spoke: false }
         }
         yield* Effect.logDebug(`模型最终输出：\n${output.text}`)
-        const response = yield* parseChannelResponse(output.text).pipe(
-          Effect.tapError((error) => Effect.logWarning(`响应解析失败：${error.reason}`)),
-        )
+        const response = yield* parseChannelResponse(output.text)
         const nextReplies = response.actions.filter((action) => action.type === "next-reply")
         const messageIds = new Set([
           ...history.messages.map((message) => message.id),

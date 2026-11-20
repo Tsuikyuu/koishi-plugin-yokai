@@ -25,7 +25,12 @@ export class ChannelPlatformError extends Data.TaggedError("ChannelPlatformError
   readonly operation: "history" | "send"
   // 脱敏后的失败分类（错误类型、系统错误码、HTTP 状态与供应商说明），只进入后台日志。
   readonly detail?: string
-}> {}
+}> {
+  override get message(): string {
+    const label = this.operation === "send" ? "平台发送失败" : "平台读取历史失败"
+    return this.detail ? `${label}：${this.detail}` : label
+  }
+}
 
 export class ChannelPlatform extends Context.Service<
   ChannelPlatform,
